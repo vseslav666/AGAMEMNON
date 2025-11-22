@@ -1,0 +1,3 @@
+Info
+AGAMEMNON
+Authentication Gateway Agent & Monitoring Environment for Network Node Operations
