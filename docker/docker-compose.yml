@@ -1,19 +1,16 @@
 version: '3.8'
 
 services:
-  # TOTP API сервис
-  totp-api:
+  # FASTAPI TACACS Management API (новый API)
+  tacacs-api:
     build: 
       context: ./api
       dockerfile: Dockerfile
     container_name: api
     ports:
       - "8000:8000"
-    volumes:
-      - ./api/data:/app/data
-      - ./api/logs:/app/logs
-      - ./api/scripts:/app/scripts
     environment:
+      - DATABASE_URL=postgresql://admin_pg:supersecret@database:5432/tacacs_db
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
@@ -59,7 +56,7 @@ services:
       - tac_network
     restart: unless-stopped
     depends_on:
-      - totp-api
+      - tacacs-api
 
 networks:
   tac_network:
