@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  totp-api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Монтируем директорию для данных (если нужно сохранять между перезапусками)
+      - ./data:/app/data
+      # Монтируем директорию логов
+      - ./logs:/app/logs
+      # Монтируем скрипты (если они изменяются)
+      - ./scripts:/app/scripts
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

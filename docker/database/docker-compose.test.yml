@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:14
+    container_name: tacacs_pg14_test
+    environment:
+      POSTGRES_USER: admin_pg
+      POSTGRES_PASSWORD: supersecret
+      POSTGRES_DB: tacacs_db
+    ports:
+      - "55432:5432"   # тестовая БД на другом порту, не мешаем боевой
+    volumes:
+      - tacacs_pg14_test_data:/var/lib/postgresql/data
+      - ./init-sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_pg -d tacacs_db"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  tester:
+    build:
+      context: .
+      dockerfile: Dockerfile.tester
+    container_name: tacacs_tester
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://tacacs_pg:supersecret@postgres:5432/tacacs_db"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    entrypoint: ["bash"]
+    tty: true
+
+volumes:
+  tacacs_pg14_test_data:

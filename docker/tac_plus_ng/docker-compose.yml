@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  tac_plus-ng:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: tacacs_plus
+    hostname: tacacs_plus
+    ports:
+      - "49:49"  # Пробрасываем на нестандартный порт для тестирования
+    volumes:
+      - ./config/tac_plus-ng.cfg:/etc/tac_plus-ng/tac_plus-ng.cfg:ro
+      #- ./config/users:/etc/tac_plus-ng/users:ro
+      #- ./logs:/var/log/tac_plus-ng
+    networks:
+      - tac_network
+    restart: unless-stopped
+
+networks:
+  tac_network:
+    driver: bridge
