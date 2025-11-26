@@ -1,24 +1,17 @@
 import os
 import json
-import time
 import argparse
-import hashlib
-from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any
+
+from datetime import datetime
 
 import psycopg2
 import psycopg2.extras
 import pyotp
 
-SCHEMA = "tacacs"
 
-ALG_MAP = {
-    "SHA1": hashlib.sha1,
-    "SHA256": hashlib.sha256,
-    "SHA512": hashlib.sha512,
-}
+# ----------------- CONNECT -----------------
 
-# -------------------- DSN / Connection --------------------
 
 def _dsn_from_env() -> str:
     dsn = os.getenv("DATABASE_URL")
@@ -40,88 +33,40 @@ def get_conn():
     return psycopg2.connect(_dsn_from_env())
 
 
-def now_utc_naive() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+# ----------------- USERS -----------------
 
-
-def _make_totp(secret: str, digits: int, period: int, algorithm: str) -> pyotp.TOTP:
-    alg = algorithm.upper()
-    digest = ALG_MAP.get(alg)
-    if not digest:
-        raise ValueError("Unsupported algorithm. Use SHA1/SHA256/SHA512.")
-    return pyotp.TOTP(secret, digits=digits, interval=period, digest=digest)
-
-
-# -------------------- Helpers for IDs --------------------
-
-def _get_user(cur, username: str):
-    cur.execute(
-        f"SELECT id, username, enabled FROM {SCHEMA}.users WHERE username = %s",
-        (username,),
-    )
-    return cur.fetchone()
-
-
-def _get_group(cur, name: str):
-    cur.execute(
-        f"SELECT id, name, enabled FROM {SCHEMA}.groups WHERE name = %s",
-        (name,),
-    )
-    return cur.fetchone()
-
-
-def _get_device(cur, name: str):
-    cur.execute(
-        f"SELECT id, name, ip_address, enabled FROM {SCHEMA}.devices WHERE name = %s",
-        (name,),
-    )
-    return cur.fetchone()
-
-
-# ==========================================================
-# USERS CRUD  (user-put / user-get / user-list / user-delete)
-# ==========================================================
 
 def user_put(
     username: str,
-    password_hash: Optional[str] = None,   # без авто-шифрования
-    password_type: str = "cleartext",
-    description: Optional[str] = None,
-    enabled: bool = True,
+    password_hash: str,
+    full_name: Optional[str] = None,
+    is_active: bool = True,
 ) -> Dict[str, Any]:
     """
-    Создать нового пользователя или обновить существующего по username.
-    password_hash записывается как есть (шифрование/хэширование пока не делаем).
+    Создать/обновить пользователя.
+    password_hash сюда приходит уже готовым (хэш/cleartext — решаешь снаружи).
     """
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
-            f"""
-            INSERT INTO {SCHEMA}.users (username, password_hash, password_type, description, enabled)
-            VALUES (%s, %s, %s, %s, %s)
+            """
+            INSERT INTO users (username, password_hash, full_name, is_active)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT (username)
             DO UPDATE SET
-              password_hash = COALESCE(EXCLUDED.password_hash, {SCHEMA}.users.password_hash),
-              password_type = COALESCE(EXCLUDED.password_type, {SCHEMA}.users.password_type),
-              description   = COALESCE(EXCLUDED.description, {SCHEMA}.users.description),
-              enabled       = EXCLUDED.enabled,
-              updated_at    = NOW()
+              password_hash = EXCLUDED.password_hash,
+              full_name     = EXCLUDED.full_name,
+              is_active     = EXCLUDED.is_active
             RETURNING *
             """,
-            (username, password_hash, password_type, description, enabled),
+            (username, password_hash, full_name, is_active),
         )
         row = cur.fetchone()
         return {"success": True, "user": row}
 
 
 def user_get(username: str) -> Dict[str, Any]:
-    """
-    Получить пользователя по username.
-    """
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            f"SELECT * FROM {SCHEMA}.users WHERE username=%s",
-            (username,),
-        )
+        cur.execute("SELECT * FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
         if not row:
             return {"success": False, "error": f"User '{username}' not found"}
@@ -130,41 +75,470 @@ def user_get(username: str) -> Dict[str, Any]:
 
 def user_delete(username: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"DELETE FROM {SCHEMA}.users WHERE username=%s RETURNING id",
-            (username,),
-        )
+        cur.execute("DELETE FROM users WHERE username = %s RETURNING user_id", (username,))
         deleted = cur.fetchone() is not None
         return {"success": True, "deleted": deleted}
 
 
 def user_list() -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.users ORDER BY username")
+        cur.execute("SELECT * FROM users ORDER BY username")
         return {"success": True, "data": cur.fetchall()}
 
 
-# ==========================================================
-# TOTP API (CLI: totp-*)
-# ==========================================================
+# ----------------- USER GROUPS -----------------
 
-def totp_get(username: str) -> Dict[str, Any]:
+
+def usergroup_put(group_name: str, description: Optional[str] = None) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        user = _get_user(cur, username)
-        if not user:
+        cur.execute(
+            """
+            INSERT INTO user_groups (group_name, description)
+            VALUES (%s, %s)
+            ON CONFLICT (group_name)
+            DO UPDATE SET description = EXCLUDED.description
+            RETURNING *
+            """,
+            (group_name, description),
+        )
+        return {"success": True, "group": cur.fetchone()}
+
+
+def usergroup_get(group_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM user_groups WHERE group_name = %s", (group_name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"User group '{group_name}' not found"}
+        return {"success": True, "group": row}
+
+
+def usergroup_delete(group_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM user_groups WHERE group_name = %s RETURNING group_id",
+            (group_name,),
+        )
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def usergroup_list() -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM user_groups ORDER BY group_name")
+        return {"success": True, "data": cur.fetchall()}
+
+
+# ----------------- USER_GROUP_MEMBERS -----------------
+
+
+def usergroup_member_add(username: str, group_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
             return {"success": False, "error": f"User '{username}' not found"}
 
-        cur.execute(
-            f"SELECT * FROM {SCHEMA}.user_mfa_totp WHERE user_id = %s",
-            (user["id"],),
-        )
-        mfa = cur.fetchone()
+        cur.execute("SELECT group_id FROM user_groups WHERE group_name = %s", (group_name,))
+        g = cur.fetchone()
+        if not g:
+            return {"success": False, "error": f"User group '{group_name}' not found"}
 
-        return {
-            "success": True,
-            "user": {"id": user["id"], "username": user["username"], "enabled": user["enabled"]},
-            "totp": mfa,
-        }
+        cur.execute(
+            """
+            INSERT INTO user_group_members (user_id, group_id)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id, group_id) DO NOTHING
+            RETURNING *
+            """,
+            (u["user_id"], g["group_id"]),
+        )
+        row = cur.fetchone()
+        return {"success": True, "member": row}
+
+
+def usergroup_member_remove(username: str, group_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
+            return {"success": False, "error": f"User '{username}' not found"}
+
+        cur.execute("SELECT group_id FROM user_groups WHERE group_name = %s", (group_name,))
+        g = cur.fetchone()
+        if not g:
+            return {"success": False, "error": f"User group '{group_name}' not found"}
+
+        cur.execute(
+            "DELETE FROM user_group_members WHERE user_id = %s AND group_id = %s RETURNING user_id",
+            (u["user_id"], g["group_id"]),
+        )
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def usergroup_member_list(username: Optional[str] = None, group_name: Optional[str] = None) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if username:
+            cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+            u = cur.fetchone()
+            if not u:
+                return {"success": False, "error": f"User '{username}' not found"}
+            cur.execute(
+                """
+                SELECT u.username, ug.group_name
+                FROM user_group_members m
+                JOIN users u ON u.user_id = m.user_id
+                JOIN user_groups ug ON ug.group_id = m.group_id
+                WHERE m.user_id = %s
+                ORDER BY ug.group_name
+                """,
+                (u["user_id"],),
+            )
+        elif group_name:
+            cur.execute("SELECT group_id FROM user_groups WHERE group_name = %s", (group_name,))
+            g = cur.fetchone()
+            if not g:
+                return {"success": False, "error": f"User group '{group_name}' not found"}
+            cur.execute(
+                """
+                SELECT u.username, ug.group_name
+                FROM user_group_members m
+                JOIN users u ON u.user_id = m.user_id
+                JOIN user_groups ug ON ug.group_id = m.group_id
+                WHERE m.group_id = %s
+                ORDER BY u.username
+                """,
+                (g["group_id"],),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT u.username, ug.group_name
+                FROM user_group_members m
+                JOIN users u ON u.user_id = m.user_id
+                JOIN user_groups ug ON ug.group_id = m.group_id
+                ORDER BY u.username, ug.group_name
+                """
+            )
+        return {"success": True, "data": cur.fetchall()}
+
+
+# ----------------- HOSTS -----------------
+
+
+def host_put(
+    ip_address: str,
+    tacacs_key: str,
+    hostname: Optional[str] = None,
+    description: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Создать/обновить хост по IP.
+    """
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            INSERT INTO hosts (hostname, ip_address, tacacs_key, description)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (ip_address)
+            DO UPDATE SET
+              hostname   = EXCLUDED.hostname,
+              tacacs_key = EXCLUDED.tacacs_key,
+              description= EXCLUDED.description
+            RETURNING *
+            """,
+            (hostname, ip_address, tacacs_key, description),
+        )
+        return {"success": True, "host": cur.fetchone()}
+
+
+def host_get_ip(ip_address: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM hosts WHERE ip_address = %s", (ip_address,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Host with IP '{ip_address}' not found"}
+        return {"success": True, "host": row}
+
+
+def host_get_name(hostname: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM hosts WHERE hostname = %s", (hostname,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Host '{hostname}' not found"}
+        return {"success": True, "host": row}
+
+
+def host_delete(ip_address: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM hosts WHERE ip_address = %s RETURNING host_id",
+            (ip_address,),
+        )
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def host_list() -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM hosts ORDER BY hostname NULLS LAST, ip_address")
+        return {"success": True, "data": cur.fetchall()}
+
+
+# ----------------- HOST GROUPS -----------------
+
+
+def hostgroup_put(group_name: str, description: Optional[str] = None) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            INSERT INTO host_groups (group_name, description)
+            VALUES (%s, %s)
+            ON CONFLICT (group_name)
+            DO UPDATE SET description = EXCLUDED.description
+            RETURNING *
+            """,
+            (group_name, description),
+        )
+        return {"success": True, "group": cur.fetchone()}
+
+
+def hostgroup_get(group_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM host_groups WHERE group_name = %s", (group_name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Host group '{group_name}' not found"}
+        return {"success": True, "group": row}
+
+
+def hostgroup_delete(group_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM host_groups WHERE group_name = %s RETURNING group_id",
+            (group_name,),
+        )
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def hostgroup_list() -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM host_groups ORDER BY group_name")
+        return {"success": True, "data": cur.fetchall()}
+
+
+# ----------------- HOST_GROUP_MEMBERS -----------------
+
+
+def hostgroup_member_add(ip_address: str, group_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT host_id FROM hosts WHERE ip_address = %s", (ip_address,))
+        h = cur.fetchone()
+        if not h:
+            return {"success": False, "error": f"Host with IP '{ip_address}' not found"}
+
+        cur.execute("SELECT group_id FROM host_groups WHERE group_name = %s", (group_name,))
+        g = cur.fetchone()
+        if not g:
+            return {"success": False, "error": f"Host group '{group_name}' not found"}
+
+        cur.execute(
+            """
+            INSERT INTO host_group_members (host_id, group_id)
+            VALUES (%s, %s)
+            ON CONFLICT (host_id, group_id) DO NOTHING
+            RETURNING *
+            """,
+            (h["host_id"], g["group_id"]),
+        )
+        return {"success": True, "member": cur.fetchone()}
+
+
+def hostgroup_member_remove(ip_address: str, group_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT host_id FROM hosts WHERE ip_address = %s", (ip_address,))
+        h = cur.fetchone()
+        if not h:
+            return {"success": False, "error": f"Host with IP '{ip_address}' not found"}
+
+        cur.execute("SELECT group_id FROM host_groups WHERE group_name = %s", (group_name,))
+        g = cur.fetchone()
+        if not g:
+            return {"success": False, "error": f"Host group '{group_name}' not found"}
+
+        cur.execute(
+            "DELETE FROM host_group_members WHERE host_id = %s AND group_id = %s RETURNING host_id",
+            (h["host_id"], g["group_id"]),
+        )
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def hostgroup_member_list(ip_address: Optional[str] = None, group_name: Optional[str] = None) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if ip_address:
+            cur.execute("SELECT host_id FROM hosts WHERE ip_address = %s", (ip_address,))
+            h = cur.fetchone()
+            if not h:
+                return {"success": False, "error": f"Host with IP '{ip_address}' not found"}
+            cur.execute(
+                """
+                SELECT h.ip_address, hg.group_name
+                FROM host_group_members m
+                JOIN hosts h ON h.host_id = m.host_id
+                JOIN host_groups hg ON hg.group_id = m.group_id
+                WHERE m.host_id = %s
+                ORDER BY hg.group_name
+                """,
+                (h["host_id"],),
+            )
+        elif group_name:
+            cur.execute("SELECT group_id FROM host_groups WHERE group_name = %s", (group_name,))
+            g = cur.fetchone()
+            if not g:
+                return {"success": False, "error": f"Host group '{group_name}' not found"}
+            cur.execute(
+                """
+                SELECT h.ip_address, hg.group_name
+                FROM host_group_members m
+                JOIN hosts h ON h.host_id = m.host_id
+                JOIN host_groups hg ON hg.group_id = m.group_id
+                WHERE m.group_id = %s
+                ORDER BY h.ip_address
+                """,
+                (g["group_id"],),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT h.ip_address, hg.group_name
+                FROM host_group_members m
+                JOIN hosts h ON h.host_id = m.host_id
+                JOIN host_groups hg ON hg.group_id = m.group_id
+                ORDER BY h.ip_address, hg.group_name
+                """
+            )
+        return {"success": True, "data": cur.fetchall()}
+
+
+# ----------------- ACCESS POLICIES -----------------
+
+
+def policy_put(
+    user_group_name: str,
+    host_group_name: str,
+    priv_lvl: int = 1,
+    allow_access: bool = True,
+) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT group_id FROM user_groups WHERE group_name = %s", (user_group_name,))
+        ug = cur.fetchone()
+        if not ug:
+            return {"success": False, "error": f"User group '{user_group_name}' not found"}
+
+        cur.execute("SELECT group_id FROM host_groups WHERE group_name = %s", (host_group_name,))
+        hg = cur.fetchone()
+        if not hg:
+            return {"success": False, "error": f"Host group '{host_group_name}' not found"}
+
+        cur.execute(
+            """
+            INSERT INTO access_policies (user_group_id, host_group_id, priv_lvl, allow_access)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_group_id, host_group_id)
+            DO UPDATE SET
+              priv_lvl    = EXCLUDED.priv_lvl,
+              allow_access= EXCLUDED.allow_access
+            RETURNING *
+            """,
+            (ug["group_id"], hg["group_id"], priv_lvl, allow_access),
+        )
+        return {"success": True, "policy": cur.fetchone()}
+
+
+def policy_get(policy_id: int) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM access_policies WHERE policy_id = %s", (policy_id,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Policy {policy_id} not found"}
+        return {"success": True, "policy": row}
+
+
+def policy_delete(policy_id: int) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM access_policies WHERE policy_id = %s RETURNING policy_id", (policy_id,))
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def policy_list() -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT ap.*, ug.group_name AS user_group_name, hg.group_name AS host_group_name
+            FROM access_policies ap
+            JOIN user_groups ug ON ug.group_id = ap.user_group_id
+            JOIN host_groups hg ON hg.group_id = ap.host_group_id
+            ORDER BY ug.group_name, hg.group_name
+            """
+        )
+        return {"success": True, "data": cur.fetchall()}
+
+
+# ----------------- COMMAND RULES -----------------
+
+
+def cmdrule_put(policy_id: int, command_pattern: str, action: str = "PERMIT") -> Dict[str, Any]:
+    action = action.upper()
+    if action not in ("PERMIT", "DENY"):
+        return {"success": False, "error": "action must be PERMIT or DENY"}
+
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT policy_id FROM access_policies WHERE policy_id = %s", (policy_id,))
+        if not cur.fetchone():
+            return {"success": False, "error": f"Policy {policy_id} not found"}
+
+        cur.execute(
+            """
+            INSERT INTO command_rules (policy_id, command_pattern, action)
+            VALUES (%s, %s, %s)
+            RETURNING *
+            """,
+            (policy_id, command_pattern, action),
+        )
+        return {"success": True, "rule": cur.fetchone()}
+
+
+def cmdrule_get(rule_id: int) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM command_rules WHERE rule_id = %s", (rule_id,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Rule {rule_id} not found"}
+        return {"success": True, "rule": row}
+
+
+def cmdrule_delete(rule_id: int) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM command_rules WHERE rule_id = %s RETURNING rule_id", (rule_id,))
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def cmdrule_list(policy_id: int) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            "SELECT * FROM command_rules WHERE policy_id = %s ORDER BY rule_id",
+            (policy_id,),
+        )
+        return {"success": True, "data": cur.fetchall()}
+
+
+# ----------------- USER TOTP -----------------
 
 
 def totp_put(
@@ -172,767 +546,423 @@ def totp_put(
     issuer: str = "tacacs-plus",
     digits: int = 6,
     period: int = 30,
-    algorithm: str = "SHA1",
+    is_enabled: bool = True,
 ) -> Dict[str, Any]:
+    """
+    Генерирует TOTP secret, пишет его в user_totp и возвращает secret + otp_uri.
+    """
     secret = pyotp.random_base32()
-    totp = _make_totp(secret, digits, period, algorithm)
+    totp = pyotp.TOTP(secret, digits=digits, interval=period)
     otp_uri = totp.provisioning_uri(name=username, issuer_name=issuer)
 
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        user = _get_user(cur, username)
-        if not user:
+        cur.execute("SELECT user_id, is_active FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
             return {"success": False, "error": f"User '{username}' not found"}
-        if not user["enabled"]:
-            return {"success": False, "error": f"User '{username}' is disabled"}
+        if not u["is_active"]:
+            return {"success": False, "error": "user is inactive"}
 
         cur.execute(
-            f"""
-            INSERT INTO {SCHEMA}.user_mfa_totp
-              (user_id, secret_base32, otp_uri, issuer, label, digits, period, algorithm,
-               enabled, disabled_until, last_used_step, last_used_at)
-            VALUES
-              (%s, %s, %s, %s, %s, %s, %s, %s,
-               TRUE, NULL, NULL, NULL)
+            """
+            INSERT INTO user_totp (user_id, totp_secret, is_enabled)
+            VALUES (%s, %s, %s)
             ON CONFLICT (user_id)
             DO UPDATE SET
-              secret_base32 = EXCLUDED.secret_base32,
-              otp_uri       = EXCLUDED.otp_uri,
-              issuer        = EXCLUDED.issuer,
-              label         = EXCLUDED.label,
-              digits        = EXCLUDED.digits,
-              period        = EXCLUDED.period,
-              algorithm     = EXCLUDED.algorithm,
-              enabled       = TRUE,
-              disabled_until = NULL,
-              last_used_step = NULL,
-              last_used_at   = NULL,
-              updated_at    = NOW()
+              totp_secret = EXCLUDED.totp_secret,
+              is_enabled  = EXCLUDED.is_enabled
             RETURNING *
             """,
-            (user["id"], secret, otp_uri, issuer, username, digits, period, algorithm.upper()),
+            (u["user_id"], secret, is_enabled),
         )
         row = cur.fetchone()
 
-        return {
-            "success": True,
-            "user": {"id": user["id"], "username": user["username"]},
-            "totp": row,
-            "secret_base32": secret,
-            "otp_uri": otp_uri,
-        }
+    return {
+        "success": True,
+        "totp": row,
+        "secret": secret,
+        "otp_uri": otp_uri,
+    }
 
 
-def totp_verify(username: str, token: str, valid_window: int = 1) -> Dict[str, Any]:
+def totp_get(username: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        user = _get_user(cur, username)
-        if not user:
+        cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
+            return {"success": False, "error": f"User '{username}' not found"}
+
+        cur.execute("SELECT * FROM user_totp WHERE user_id = %s", (u["user_id"],))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": "TOTP profile not found"}
+        return {"success": True, "totp": row}
+
+
+def totp_disable(username: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
             return {"success": False, "error": f"User '{username}' not found"}
 
         cur.execute(
-            f"SELECT * FROM {SCHEMA}.user_mfa_totp WHERE user_id = %s",
-            (user["id"],),
-        )
-        mfa = cur.fetchone()
-        if not mfa or not mfa["enabled"]:
-            return {"success": False, "error": "TOTP not enabled for this user"}
-
-        now_naive_utc = now_utc_naive()
-        if mfa["disabled_until"] and now_naive_utc < mfa["disabled_until"]:
-            return {
-                "success": False,
-                "error": f"TOTP temporarily disabled until {mfa['disabled_until'].isoformat()}",
-            }
-
-        totp = _make_totp(
-            mfa["secret_base32"],
-            mfa["digits"],
-            mfa["period"],
-            mfa["algorithm"],
-        )
-
-        step = int(time.time() // mfa["period"])
-        last = mfa["last_used_step"]
-        if last is not None and step <= last:
-            return {"success": False, "error": "Token for this time-step already used"}
-
-        ok = totp.verify(token, valid_window=valid_window)
-        if not ok:
-            return {"success": True, "verified": False}
-
-        cur.execute(
-            f"""
-            UPDATE {SCHEMA}.user_mfa_totp
-            SET last_used_step = %s,
-                last_used_at   = %s,
-                updated_at     = NOW()
+            """
+            UPDATE user_totp
+            SET is_enabled = FALSE
             WHERE user_id = %s
+            RETURNING *
             """,
-            (step, now_naive_utc, user["id"]),
+            (u["user_id"],),
         )
-
-        return {"success": True, "verified": True}
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": "TOTP profile not found"}
+        return {"success": True, "totp": row}
 
 
 def totp_delete(username: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        user = _get_user(cur, username)
-        if not user:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
             return {"success": False, "error": f"User '{username}' not found"}
 
-        cur.execute(
-            f"DELETE FROM {SCHEMA}.user_mfa_totp WHERE user_id = %s RETURNING user_id",
-            (user["id"],),
-        )
+        cur.execute("DELETE FROM user_totp WHERE user_id = %s RETURNING user_id", (u["user_id"],))
         deleted = cur.fetchone() is not None
         return {"success": True, "deleted": deleted}
 
 
-def totp_list() -> Dict[str, Any]:
+def verify_totp_for_user(
+    username: str,
+    token: str,
+    digits: int = 6,
+    period: int = 30,
+    valid_window: int = 1,
+) -> Dict[str, Any]:
+    """
+    Проверка TOTP-кода для пользователя.
+    valid_window = 1 позволяет +/- один шаг времени.
+    """
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # user
+        cur.execute("SELECT user_id, is_active FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
+            return {"success": False, "verified": False, "reason": f"user '{username}' not found"}
+
+        if not u["is_active"]:
+            return {"success": False, "verified": False, "reason": "user is inactive"}
+
+        # TOTP profile
+        cur.execute("SELECT * FROM user_totp WHERE user_id = %s", (u["user_id"],))
+        tf = cur.fetchone()
+        if not tf:
+            return {"success": False, "verified": False, "reason": "TOTP profile not found"}
+
+        if not tf["is_enabled"]:
+            return {"success": False, "verified": False, "reason": "TOTP is disabled"}
+
+        secret = tf["totp_secret"]
+        if not secret:
+            return {"success": False, "verified": False, "reason": "empty TOTP secret"}
+
+        totp = pyotp.TOTP(secret, digits=digits, interval=period)
+        ok = totp.verify(token, valid_window=valid_window)
+
+        if not ok:
+            return {"success": True, "verified": False, "reason": "invalid token"}
+
+        # запишем время успешного использования
         cur.execute(
-            f"""
-            SELECT u.username, u.enabled AS user_enabled,
-                   COALESCE(m.enabled, FALSE) AS totp_enabled,
-                   m.disabled_until
-            FROM {SCHEMA}.users u
-            LEFT JOIN {SCHEMA}.user_mfa_totp m ON m.user_id = u.id
-            ORDER BY u.username
+            "UPDATE user_totp SET last_used_at = %s WHERE user_id = %s",
+            (datetime.utcnow(), u["user_id"]),
+        )
+
+        return {"success": True, "verified": True, "reason": "ok"}
+
+
+# ----------------- HOSTS ACCESSIBLE BY USER -----------------
+
+
+def user_hosts(username: str) -> Dict[str, Any]:
+    """
+    Вернуть список хостов, к которым пользователь имеет доступ:
+      users -> user_group_members -> access_policies -> host_group_members -> hosts
+    """
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
+            return {"success": False, "error": f"User '{username}' not found"}
+
+        cur.execute(
             """
-        )
-        rows = cur.fetchall()
-        return {"success": True, "data": rows}
-
-
-def totp_backup(path: Optional[str] = None) -> Dict[str, Any]:
-    if not path:
-        path = f"totp_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            f"""
-            SELECT u.username, m.*
-            FROM {SCHEMA}.user_mfa_totp m
-            JOIN {SCHEMA}.users u ON u.id = m.user_id
-            ORDER BY u.username
-            """
-        )
-        rows = cur.fetchall()
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(rows, f, ensure_ascii=False, indent=2, default=str)
-
-    return {"success": True, "backup_path": path, "count": len(rows)}
-
-
-# ==========================================================
-# DEVICES CRUD
-# ==========================================================
-
-def device_get(name: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        dev = _get_device(cur, name)
-        if not dev:
-            return {"success": False, "error": f"Device '{name}' not found"}
-        cur.execute(f"SELECT * FROM {SCHEMA}.devices WHERE id=%s", (dev["id"],))
-        row = cur.fetchone()
-        return {"success": True, "device": row}
-
-
-def device_put(
-    name: str,
-    ip_address: str,
-    secret: str,
-    description: Optional[str] = None,
-    enabled: bool = True,
-) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            f"""
-            INSERT INTO {SCHEMA}.devices (name, ip_address, secret, description, enabled)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (name)
-            DO UPDATE SET
-              ip_address = EXCLUDED.ip_address,
-              secret     = EXCLUDED.secret,
-              description= EXCLUDED.description,
-              enabled    = EXCLUDED.enabled,
-              updated_at = NOW()
-            RETURNING *
+            SELECT DISTINCT h.*
+            FROM user_group_members ugm
+            JOIN access_policies ap
+              ON ap.user_group_id = ugm.group_id
+             AND ap.allow_access = TRUE
+            JOIN host_group_members hgm
+              ON hgm.group_id = ap.host_group_id
+            JOIN hosts h
+              ON h.host_id = hgm.host_id
+            WHERE ugm.user_id = %s
+            ORDER BY h.hostname NULLS LAST, h.ip_address
             """,
-            (name, ip_address, secret, description, enabled),
-        )
-        row = cur.fetchone()
-        return {"success": True, "device": row}
-
-
-def device_delete(name: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"DELETE FROM {SCHEMA}.devices WHERE name=%s RETURNING id",
-            (name,),
-        )
-        deleted = cur.fetchone() is not None
-        return {"success": True, "deleted": deleted}
-
-
-def device_list() -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.devices ORDER BY name")
-        return {"success": True, "data": cur.fetchall()}
-
-
-# ==========================================================
-# GROUPS CRUD
-# ==========================================================
-
-def group_get(name: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        grp = _get_group(cur, name)
-        if not grp:
-            return {"success": False, "error": f"Group '{name}' not found"}
-        cur.execute(f"SELECT * FROM {SCHEMA}.groups WHERE id=%s", (grp["id"],))
-        return {"success": True, "group": cur.fetchone()}
-
-
-def group_put(
-    name: str,
-    description: Optional[str] = None,
-    enabled: bool = True,
-) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            f"""
-            INSERT INTO {SCHEMA}.groups (name, description, enabled)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (name)
-            DO UPDATE SET
-              description = EXCLUDED.description,
-              enabled = EXCLUDED.enabled,
-              updated_at = NOW()
-            RETURNING *
-            """,
-            (name, description, enabled),
-        )
-        return {"success": True, "group": cur.fetchone()}
-
-
-def group_delete(name: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"DELETE FROM {SCHEMA}.groups WHERE name=%s RETURNING id",
-            (name,),
-        )
-        deleted = cur.fetchone() is not None
-        return {"success": True, "deleted": deleted}
-
-
-def group_list() -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(f"SELECT * FROM {SCHEMA}.groups ORDER BY name")
-        return {"success": True, "data": cur.fetchall()}
-
-
-# ==========================================================
-# USER <-> GROUP membership
-# ==========================================================
-
-def membership_add(username: str, groupname: str, priority: int = 10) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        user = _get_user(cur, username)
-        if not user:
-            return {"success": False, "error": f"User '{username}' not found"}
-        grp = _get_group(cur, groupname)
-        if not grp:
-            return {"success": False, "error": f"Group '{groupname}' not found"}
-
-        cur.execute(
-            f"""
-            INSERT INTO {SCHEMA}.user_groups (user_id, group_id, priority)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (user_id, group_id)
-            DO UPDATE SET priority = EXCLUDED.priority
-            RETURNING *
-            """,
-            (user["id"], grp["id"], priority),
-        )
-        return {"success": True, "membership": cur.fetchone()}
-
-
-def membership_remove(username: str, groupname: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        user = _get_user(cur, username)
-        if not user:
-            return {"success": False, "error": f"User '{username}' not found"}
-        grp = _get_group(cur, groupname)
-        if not grp:
-            return {"success": False, "error": f"Group '{groupname}' not found"}
-
-        cur.execute(
-            f"DELETE FROM {SCHEMA}.user_groups WHERE user_id=%s AND group_id=%s RETURNING user_id",
-            (user["id"], grp["id"]),
-        )
-        deleted = cur.fetchone() is not None
-        return {"success": True, "deleted": deleted}
-
-
-def membership_list(username: Optional[str] = None, groupname: Optional[str] = None) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        if username:
-            user = _get_user(cur, username)
-            if not user:
-                return {"success": False, "error": f"User '{username}' not found"}
-            cur.execute(
-                f"""
-                SELECT u.username, g.name as groupname, ug.priority
-                FROM {SCHEMA}.user_groups ug
-                JOIN {SCHEMA}.users u ON u.id=ug.user_id
-                JOIN {SCHEMA}.groups g ON g.id=ug.group_id
-                WHERE ug.user_id=%s
-                ORDER BY ug.priority ASC, g.name
-                """,
-                (user["id"],),
-            )
-        elif groupname:
-            grp = _get_group(cur, groupname)
-            if not grp:
-                return {"success": False, "error": f"Group '{groupname}' not found"}
-            cur.execute(
-                f"""
-                SELECT u.username, g.name as groupname, ug.priority
-                FROM {SCHEMA}.user_groups ug
-                JOIN {SCHEMA}.users u ON u.id=ug.user_id
-                JOIN {SCHEMA}.groups g ON g.id=ug.group_id
-                WHERE ug.group_id=%s
-                ORDER BY ug.priority ASC, u.username
-                """,
-                (grp["id"],),
-            )
-        else:
-            cur.execute(
-                f"""
-                SELECT u.username, g.name as groupname, ug.priority
-                FROM {SCHEMA}.user_groups ug
-                JOIN {SCHEMA}.users u ON u.id=ug.user_id
-                JOIN {SCHEMA}.groups g ON g.id=ug.group_id
-                ORDER BY u.username, ug.priority ASC
-                """
-            )
-        return {"success": True, "data": cur.fetchall()}
-
-
-# ==========================================================
-# AUTHORIZATION RULES CRUD
-# ==========================================================
-
-def rule_create(
-    name: str,
-    object_type: str,
-    object_name: str,
-    service: str = "shell",
-    privilege_level: Optional[int] = None,
-    permitted_commands: Optional[str] = None,
-    denied_commands: Optional[str] = None,
-    argument_filter: Optional[str] = None,
-    enabled: bool = True,
-    avpairs: Optional[List[Tuple[str, str]]] = None,
-) -> Dict[str, Any]:
-    object_type = object_type.lower()
-    if object_type not in ("user", "group"):
-        return {"success": False, "error": "object_type must be 'user' or 'group'"}
-
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        user_id = None
-        group_id = None
-
-        if object_type == "user":
-            user = _get_user(cur, object_name)
-            if not user:
-                return {"success": False, "error": f"User '{object_name}' not found"}
-            user_id = user["id"]
-        else:
-            grp = _get_group(cur, object_name)
-            if not grp:
-                return {"success": False, "error": f"Group '{object_name}' not found"}
-            group_id = grp["id"]
-
-        cur.execute(
-            f"""
-            INSERT INTO {SCHEMA}.authorization_rules
-              (name, object_type, user_id, group_id, service, privilege_level,
-               permitted_commands, denied_commands, argument_filter, enabled)
-            VALUES
-              (%s, %s, %s, %s, %s, %s,
-               %s, %s, %s, %s)
-            RETURNING *
-            """,
-            (
-                name, object_type, user_id, group_id, service, privilege_level,
-                permitted_commands, denied_commands, argument_filter, enabled
-            ),
-        )
-        rule = cur.fetchone()
-
-        inserted_av = []
-        if avpairs:
-            for k, v in avpairs:
-                cur.execute(
-                    f"""
-                    INSERT INTO {SCHEMA}.authorization_rule_avpairs
-                      (rule_id, av_key, av_value, enabled)
-                    VALUES (%s, %s, %s, TRUE)
-                    ON CONFLICT (rule_id, av_key, av_value) DO NOTHING
-                    RETURNING *
-                    """,
-                    (rule["id"], k, v),
-                )
-                row = cur.fetchone()
-                if row:
-                    inserted_av.append(row)
-
-        return {"success": True, "rule": rule, "avpairs": inserted_av}
-
-
-def rule_get(rule_id: int) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            f"SELECT * FROM {SCHEMA}.authorization_rules WHERE id=%s",
-            (rule_id,),
-        )
-        rule = cur.fetchone()
-        if not rule:
-            return {"success": False, "error": f"Rule id={rule_id} not found"}
-
-        cur.execute(
-            f"SELECT * FROM {SCHEMA}.authorization_rule_avpairs WHERE rule_id=%s ORDER BY id",
-            (rule_id,),
-        )
-        av = cur.fetchall()
-
-        return {"success": True, "rule": rule, "avpairs": av}
-
-
-def rule_list(
-    object_type: Optional[str] = None,
-    object_name: Optional[str] = None,
-    service: Optional[str] = None,
-) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        where = []
-        params = []
-
-        if object_type:
-            where.append("object_type = %s")
-            params.append(object_type.lower())
-
-        if service:
-            where.append("service = %s")
-            params.append(service)
-
-        if object_name and object_type:
-            if object_type.lower() == "user":
-                user = _get_user(cur, object_name)
-                if not user:
-                    return {"success": False, "error": f"User '{object_name}' not found"}
-                where.append("user_id = %s")
-                params.append(user["id"])
-            elif object_type.lower() == "group":
-                grp = _get_group(cur, object_name)
-                if not grp:
-                    return {"success": False, "error": f"Group '{object_name}' not found"}
-                where.append("group_id = %s")
-                params.append(grp["id"])
-
-        sql = f"SELECT * FROM {SCHEMA}.authorization_rules"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY id"
-
-        cur.execute(sql, tuple(params))
-        return {"success": True, "data": cur.fetchall()}
-
-
-def rule_delete(rule_id: int) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"DELETE FROM {SCHEMA}.authorization_rules WHERE id=%s RETURNING id",
-            (rule_id,),
-        )
-        deleted = cur.fetchone() is not None
-        return {"success": True, "deleted": deleted}
-
-
-# ==========================================================
-# RULE AVPAIRS CRUD
-# ==========================================================
-
-def rule_av_add(rule_id: int, key: str, value: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            f"SELECT id FROM {SCHEMA}.authorization_rules WHERE id=%s",
-            (rule_id,),
-        )
-        if not cur.fetchone():
-            return {"success": False, "error": f"Rule id={rule_id} not found"}
-
-        cur.execute(
-            f"""
-            INSERT INTO {SCHEMA}.authorization_rule_avpairs (rule_id, av_key, av_value, enabled)
-            VALUES (%s, %s, %s, TRUE)
-            ON CONFLICT (rule_id, av_key, av_value)
-            DO UPDATE SET enabled=TRUE
-            RETURNING *
-            """,
-            (rule_id, key, value),
-        )
-        return {"success": True, "avpair": cur.fetchone()}
-
-
-def rule_av_remove(rule_id: int, key: str, value: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            f"""
-            DELETE FROM {SCHEMA}.authorization_rule_avpairs
-            WHERE rule_id=%s AND av_key=%s AND av_value=%s
-            RETURNING id
-            """,
-            (rule_id, key, value),
-        )
-        deleted = cur.fetchone() is not None
-        return {"success": True, "deleted": deleted}
-
-
-def rule_av_list(rule_id: int) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            f"SELECT * FROM {SCHEMA}.authorization_rule_avpairs WHERE rule_id=%s ORDER BY id",
-            (rule_id,),
+            (u["user_id"],),
         )
         return {"success": True, "data": cur.fetchall()}
 
 
-# ==========================================================
-# CLI
-# ==========================================================
+# ----------------- CLI -----------------
+
 
 def main():
-    p = argparse.ArgumentParser(description="Tacacs DB helper")
+    p = argparse.ArgumentParser(description="Tacacs DB helper (новая схема)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    # ---- USERS ----
-    ug = sub.add_parser("user-get", help="Get user by username")
+    # USERS
+    ug = sub.add_parser("user-get")
     ug.add_argument("username")
 
-    up = sub.add_parser("user-put", help="Create/update user")
+    up = sub.add_parser("user-put")
     up.add_argument("username")
-    up.add_argument("--password-hash")
-    up.add_argument("--password-type", default="cleartext")
-    up.add_argument("--description")
-    up.add_argument("--enabled", type=lambda x: x.lower() == "true", default=True)
+    up.add_argument("password_hash")
+    up.add_argument("--full-name")
+    up.add_argument("--is-active", type=lambda x: x.lower() == "true", default=True)
 
     ud = sub.add_parser("user-delete")
     ud.add_argument("username")
 
     sub.add_parser("user-list")
 
-    # ---- TOTP ----
-    tg = sub.add_parser("totp-get")
-    tg.add_argument("username")
+    # USER GROUPS
+    ugg = sub.add_parser("usergroup-get")
+    ugg.add_argument("group_name")
 
-    tp = sub.add_parser("totp-put")
-    tp.add_argument("username")
-    tp.add_argument("--issuer", default="tacacs-plus")
-    tp.add_argument("--digits", type=int, default=6)
-    tp.add_argument("--period", type=int, default=30)
-    tp.add_argument("--algorithm", default="SHA1")
+    ugp = sub.add_parser("usergroup-put")
+    ugp.add_argument("group_name")
+    ugp.add_argument("--description")
 
-    tv = sub.add_parser("totp-verify")
-    tv.add_argument("username")
-    tv.add_argument("token")
-    tv.add_argument("--window", type=int, default=1)
+    ugd = sub.add_parser("usergroup-delete")
+    ugd.add_argument("group_name")
 
-    td = sub.add_parser("totp-delete")
-    td.add_argument("username")
+    sub.add_parser("usergroup-list")
 
-    sub.add_parser("totp-list")
+    # USER GROUP MEMBERS
+    ugma = sub.add_parser("usergroup-member-add")
+    ugma.add_argument("username")
+    ugma.add_argument("group_name")
 
-    tb = sub.add_parser("totp-backup")
-    tb.add_argument("--path")
+    ugmr = sub.add_parser("usergroup-member-remove")
+    ugmr.add_argument("username")
+    ugmr.add_argument("group_name")
 
-    # ---- Devices ----
-    dg = sub.add_parser("device-get")
-    dg.add_argument("name")
+    ugml = sub.add_parser("usergroup-member-list")
+    ugml.add_argument("--username")
+    ugml.add_argument("--group_name")
 
-    dp = sub.add_parser("device-put")
-    dp.add_argument("name")
-    dp.add_argument("ip_address")
-    dp.add_argument("secret")
-    dp.add_argument("--description")
-    dp.add_argument("--enabled", type=lambda x: x.lower() == "true", default=True)
+    # HOSTS
+    hp = sub.add_parser("host-put")
+    hp.add_argument("ip_address")
+    hp.add_argument("tacacs_key")
+    hp.add_argument("--hostname")
+    hp.add_argument("--description")
 
-    dd = sub.add_parser("device-delete")
-    dd.add_argument("name")
+    hgi = sub.add_parser("host-get-ip")
+    hgi.add_argument("ip_address")
 
-    sub.add_parser("device-list")
+    hgn = sub.add_parser("host-get-name")
+    hgn.add_argument("hostname")
 
-    # ---- Groups ----
-    gg = sub.add_parser("group-get")
-    gg.add_argument("name")
+    hd = sub.add_parser("host-delete")
+    hd.add_argument("ip_address")
 
-    gp = sub.add_parser("group-put")
-    gp.add_argument("name")
-    gp.add_argument("--description")
-    gp.add_argument("--enabled", type=lambda x: x.lower() == "true", default=True)
+    sub.add_parser("host-list")
 
-    gd = sub.add_parser("group-delete")
-    gd.add_argument("name")
+    # HOST GROUPS
+    hgg = sub.add_parser("hostgroup-get")
+    hgg.add_argument("group_name")
 
-    sub.add_parser("group-list")
+    hgp = sub.add_parser("hostgroup-put")
+    hgp.add_argument("group_name")
+    hgp.add_argument("--description")
 
-    # ---- Membership ----
-    ma = sub.add_parser("member-add")
-    ma.add_argument("username")
-    ma.add_argument("groupname")
-    ma.add_argument("--priority", type=int, default=10)
+    hgd = sub.add_parser("hostgroup-delete")
+    hgd.add_argument("group_name")
 
-    mr = sub.add_parser("member-remove")
-    mr.add_argument("username")
-    mr.add_argument("groupname")
+    sub.add_parser("hostgroup-list")
 
-    ml = sub.add_parser("member-list")
-    ml.add_argument("--username")
-    ml.add_argument("--groupname")
+    # HOST GROUP MEMBERS
+    hgma = sub.add_parser("hostgroup-member-add")
+    hgma.add_argument("ip_address")
+    hgma.add_argument("group_name")
 
-    # ---- Rules ----
-    rc = sub.add_parser("rule-create")
-    rc.add_argument("name")
-    rc.add_argument("object_type", choices=["user", "group"])
-    rc.add_argument("object_name")
-    rc.add_argument("--service", default="shell")
-    rc.add_argument("--priv", type=int)
-    rc.add_argument("--permit")
-    rc.add_argument("--deny")
-    rc.add_argument("--argfilter")
-    rc.add_argument("--enabled", type=lambda x: x.lower() == "true", default=True)
-    rc.add_argument("--av", action="append", help="AV-pair as key=value (repeatable)")
+    hgmrem = sub.add_parser("hostgroup-member-remove")
+    hgmrem.add_argument("ip_address")
+    hgmrem.add_argument("group_name")
 
-    rgp = sub.add_parser("rule-get")
-    rgp.add_argument("id", type=int)
+    hgml = sub.add_parser("hostgroup-member-list")
+    hgml.add_argument("--ip_address")
+    hgml.add_argument("--group_name")
 
-    rlp = sub.add_parser("rule-list")
-    rlp.add_argument("--object-type", choices=["user", "group"])
-    rlp.add_argument("--object-name")
-    rlp.add_argument("--service")
+    # POLICIES
+    pp = sub.add_parser("policy-put")
+    pp.add_argument("user_group_name")
+    pp.add_argument("host_group_name")
+    pp.add_argument("--priv-lvl", type=int, default=1)
+    pp.add_argument("--allow-access", type=lambda x: x.lower() == "true", default=True)
 
-    rdp = sub.add_parser("rule-delete")
-    rdp.add_argument("id", type=int)
+    pg = sub.add_parser("policy-get")
+    pg.add_argument("policy_id", type=int)
 
-    # ---- Rule AVPairs ----
-    raa = sub.add_parser("rule-av-add")
-    raa.add_argument("id", type=int)
-    raa.add_argument("key")
-    raa.add_argument("value")
+    pd = sub.add_parser("policy-delete")
+    pd.add_argument("policy_id", type=int)
 
-    rar = sub.add_parser("rule-av-remove")
-    rar.add_argument("id", type=int)
-    rar.add_argument("key")
-    rar.add_argument("value")
+    sub.add_parser("policy-list")
 
-    ral = sub.add_parser("rule-av-list")
-    ral.add_argument("id", type=int)
+    # COMMAND RULES
+    crp = sub.add_parser("cmdrule-put")
+    crp.add_argument("policy_id", type=int)
+    crp.add_argument("command_pattern")
+    crp.add_argument("--action", default="PERMIT")
+
+    crg = sub.add_parser("cmdrule-get")
+    crg.add_argument("rule_id", type=int)
+
+    crd = sub.add_parser("cmdrule-delete")
+    crd.add_argument("rule_id", type=int)
+
+    crl = sub.add_parser("cmdrule-list")
+    crl.add_argument("policy_id", type=int)
+
+    # TOTP
+    tfp = sub.add_parser("totp-put")
+    tfp.add_argument("username")
+    tfp.add_argument("--issuer", default="tacacs-plus")
+    tfp.add_argument("--digits", type=int, default=6)
+    tfp.add_argument("--period", type=int, default=30)
+    tfp.add_argument("--is-enabled", type=lambda x: x.lower() == "true", default=True)
+
+    tfg = sub.add_parser("totp-get")
+    tfg.add_argument("username")
+
+    tfd = sub.add_parser("totp-disable")
+    tfd.add_argument("username")
+
+    tfr = sub.add_parser("totp-delete")
+    tfr.add_argument("username")
+
+    tfv = sub.add_parser("totp-verify")
+    tfv.add_argument("username")
+    tfv.add_argument("token")
+    tfv.add_argument("--digits", type=int, default=6)
+    tfv.add_argument("--period", type=int, default=30)
+    tfv.add_argument("--window", type=int, default=1)
+
+    # USER-HOSTS
+    uhp = sub.add_parser("user-hosts")
+    uhp.add_argument("username")
 
     args = p.parse_args()
 
-    # dispatch
+    # DISPATCH
     if args.cmd == "user-get":
         out = user_get(args.username)
     elif args.cmd == "user-put":
-        out = user_put(
-            args.username,
-            password_hash=args.password_hash,
-            password_type=args.password_type,
-            description=args.description,
-            enabled=args.enabled,
-        )
+        out = user_put(args.username, args.password_hash, args.full_name, args.is_active)
     elif args.cmd == "user-delete":
         out = user_delete(args.username)
     elif args.cmd == "user-list":
         out = user_list()
 
+    elif args.cmd == "usergroup-get":
+        out = usergroup_get(args.group_name)
+    elif args.cmd == "usergroup-put":
+        out = usergroup_put(args.group_name, args.description)
+    elif args.cmd == "usergroup-delete":
+        out = usergroup_delete(args.group_name)
+    elif args.cmd == "usergroup-list":
+        out = usergroup_list()
+
+    elif args.cmd == "usergroup-member-add":
+        out = usergroup_member_add(args.username, args.group_name)
+    elif args.cmd == "usergroup-member-remove":
+        out = usergroup_member_remove(args.username, args.group_name)
+    elif args.cmd == "usergroup-member-list":
+        out = usergroup_member_list(args.username, args.group_name)
+
+    elif args.cmd == "host-put":
+        out = host_put(args.ip_address, args.tacacs_key, args.hostname, args.description)
+    elif args.cmd == "host-get-ip":
+        out = host_get_ip(args.ip_address)
+    elif args.cmd == "host-get-name":
+        out = host_get_name(args.hostname)
+    elif args.cmd == "host-delete":
+        out = host_delete(args.ip_address)
+    elif args.cmd == "host-list":
+        out = host_list()
+
+    elif args.cmd == "hostgroup-get":
+        out = hostgroup_get(args.group_name)
+    elif args.cmd == "hostgroup-put":
+        out = hostgroup_put(args.group_name, args.description)
+    elif args.cmd == "hostgroup-delete":
+        out = hostgroup_delete(args.group_name)
+    elif args.cmd == "hostgroup-list":
+        out = hostgroup_list()
+
+    elif args.cmd == "hostgroup-member-add":
+        out = hostgroup_member_add(args.ip_address, args.group_name)
+    elif args.cmd == "hostgroup-member-remove":
+        out = hostgroup_member_remove(args.ip_address, args.group_name)
+    elif args.cmd == "hostgroup-member-list":
+        out = hostgroup_member_list(args.ip_address, args.group_name)
+
+    elif args.cmd == "policy-put":
+        out = policy_put(args.user_group_name, args.host_group_name, args.priv_lvl, args.allow_access)
+    elif args.cmd == "policy-get":
+        out = policy_get(args.policy_id)
+    elif args.cmd == "policy-delete":
+        out = policy_delete(args.policy_id)
+    elif args.cmd == "policy-list":
+        out = policy_list()
+
+    elif args.cmd == "cmdrule-put":
+        out = cmdrule_put(args.policy_id, args.command_pattern, args.action)
+    elif args.cmd == "cmdrule-get":
+        out = cmdrule_get(args.rule_id)
+    elif args.cmd == "cmdrule-delete":
+        out = cmdrule_delete(args.rule_id)
+    elif args.cmd == "cmdrule-list":
+        out = cmdrule_list(args.policy_id)
+
+    elif args.cmd == "totp-put":
+        out = totp_put(
+            args.username,
+            issuer=args.issuer,
+            digits=args.digits,
+            period=args.period,
+            is_enabled=args.is_enabled,
+        )
     elif args.cmd == "totp-get":
         out = totp_get(args.username)
-    elif args.cmd == "totp-put":
-        out = totp_put(args.username, args.issuer, args.digits, args.period, args.algorithm)
-    elif args.cmd == "totp-verify":
-        out = totp_verify(args.username, args.token, args.window)
+    elif args.cmd == "totp-disable":
+        out = totp_disable(args.username)
     elif args.cmd == "totp-delete":
         out = totp_delete(args.username)
-    elif args.cmd == "totp-list":
-        out = totp_list()
-    elif args.cmd == "totp-backup":
-        out = totp_backup(args.path)
-
-    elif args.cmd == "device-get":
-        out = device_get(args.name)
-    elif args.cmd == "device-put":
-        out = device_put(args.name, args.ip_address, args.secret, args.description, args.enabled)
-    elif args.cmd == "device-delete":
-        out = device_delete(args.name)
-    elif args.cmd == "device-list":
-        out = device_list()
-
-    elif args.cmd == "group-get":
-        out = group_get(args.name)
-    elif args.cmd == "group-put":
-        out = group_put(args.name, args.description, args.enabled)
-    elif args.cmd == "group-delete":
-        out = group_delete(args.name)
-    elif args.cmd == "group-list":
-        out = group_list()
-
-    elif args.cmd == "member-add":
-        out = membership_add(args.username, args.groupname, args.priority)
-    elif args.cmd == "member-remove":
-        out = membership_remove(args.username, args.groupname)
-    elif args.cmd == "member-list":
-        out = membership_list(args.username, args.groupname)
-
-    elif args.cmd == "rule-create":
-        avpairs = []
-        if args.av:
-            for item in args.av:
-                if "=" not in item:
-                    out = {"success": False, "error": f"Bad av format '{item}', use key=value"}
-                    print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
-                    return
-                k, v = item.split("=", 1)
-                avpairs.append((k, v))
-
-        out = rule_create(
-            name=args.name,
-            object_type=args.object_type,
-            object_name=args.object_name,
-            service=args.service,
-            privilege_level=args.priv,
-            permitted_commands=args.permit,
-            denied_commands=args.deny,
-            argument_filter=args.argfilter,
-            enabled=args.enabled,
-            avpairs=avpairs or None,
+    elif args.cmd == "totp-verify":
+        out = verify_totp_for_user(
+            args.username,
+            args.token,
+            digits=args.digits,
+            period=args.period,
+            valid_window=args.window,
         )
-    elif args.cmd == "rule-get":
-        out = rule_get(args.id)
-    elif args.cmd == "rule-list":
-        out = rule_list(args.object_type, args.object_name, args.service)
-    elif args.cmd == "rule-delete":
-        out = rule_delete(args.id)
 
-    elif args.cmd == "rule-av-add":
-        out = rule_av_add(args.id, args.key, args.value)
-    elif args.cmd == "rule-av-remove":
-        out = rule_av_remove(args.id, args.key, args.value)
-    elif args.cmd == "rule-av-list":
-        out = rule_av_list(args.id)
-
+    elif args.cmd == "user-hosts":
+        out = user_hosts(args.username)
     else:
         out = {"success": False, "error": "unknown command"}
 

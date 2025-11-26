@@ -1,0 +1,56 @@
+# USERS
+python tacacs_db.py user-get <username>
+python tacacs_db.py user-put <username> <password_hash> [--full-name <name>] [--is-active true|false]
+python tacacs_db.py user-delete <username>
+python tacacs_db.py user-list
+
+# USER GROUPS
+python tacacs_db.py usergroup-get <group_name>
+python tacacs_db.py usergroup-put <group_name> [--description <text>]
+python tacacs_db.py usergroup-delete <group_name>
+python tacacs_db.py usergroup-list
+
+# USER GROUP MEMBERS
+python tacacs_db.py usergroup-member-add <username> <group_name>
+python tacacs_db.py usergroup-member-remove <username> <group_name>
+python tacacs_db.py usergroup-member-list [--username <username>] [--group_name <group_name>]
+
+# HOSTS (DEVICES)
+python tacacs_db.py host-put <ip_address> <tacacs_key> [--hostname <name>] [--description <text>]
+python tacacs_db.py host-get-ip <ip_address>
+python tacacs_db.py host-get-name <hostname>
+python tacacs_db.py host-delete <ip_address>
+python tacacs_db.py host-list
+
+# HOST GROUPS
+python tacacs_db.py hostgroup-get <group_name>
+python tacacs_db.py hostgroup-put <group_name> [--description <text>]
+python tacacs_db.py hostgroup-delete <group_name>
+python tacacs_db.py hostgroup-list
+
+# HOST GROUP MEMBERS
+python tacacs_db.py hostgroup-member-add <ip_address> <group_name>
+python tacacs_db.py hostgroup-member-remove <ip_address> <group_name>
+python tacacs_db.py hostgroup-member-list [--ip_address <ip>] [--group_name <group_name>]
+
+# ACCESS POLICIES
+python tacacs_db.py policy-put <user_group_name> <host_group_name> [--priv-lvl <0-15>] [--allow-access true|false]
+python tacacs_db.py policy-get <policy_id>
+python tacacs_db.py policy-delete <policy_id>
+python tacacs_db.py policy-list
+
+# COMMAND RULES
+python tacacs_db.py cmdrule-put <policy_id> <command_pattern> [--action PERMIT|DENY]
+python tacacs_db.py cmdrule-get <rule_id>
+python tacacs_db.py cmdrule-delete <rule_id>
+python tacacs_db.py cmdrule-list <policy_id>
+
+# TOTP
+python tacacs_db.py totp-put <username> [--issuer <name>] [--digits 6] [--period 30] [--is-enabled true|false]
+python tacacs_db.py totp-get <username>
+python tacacs_db.py totp-disable <username>
+python tacacs_db.py totp-delete <username>
+python tacacs_db.py totp-verify <username> <token> [--digits 6] [--period 30] [--window 1]
+
+# USER → ACCESSIBLE HOSTS
+python tacacs_db.py user-hosts <username>
