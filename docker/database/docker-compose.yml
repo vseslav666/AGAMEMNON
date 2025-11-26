@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:14
+    container_name: database
+    environment:
+      POSTGRES_USER: admin_pg
+      POSTGRES_PASSWORD: supersecret
+      POSTGRES_DB: tacacs_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - tacacs_pg14_data:/var/lib/postgresql/data
+      - ./init-sql:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+
+volumes:
+  tacacs_pg14_data:
