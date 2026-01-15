@@ -1,9 +1,10 @@
 tacacs-api/
 ├── app/
 │   ├── __init__.py
-│   ├── main.py                 # Основной файл приложения FastAPI
+│   ├── main.py                # Основной файл приложения FastAPI
 │   ├── models.py              # Модели Pydantic
 │   ├── database.py            # Настройка подключения к БД
+│   ├── tacacs_db.py           # Скрипт работы tacacs с БД 
 │   └── repositories/
 │       ├── __init__.py
 │       └── user_repository.py # Репозиторий для работы с пользователями

@@ -9,6 +9,7 @@ import psycopg2
 import psycopg2.extras
 import pyotp
 
+DEFAULT_SCHEMA = os.getenv("PGSCHEMA", "tacacs")
 
 # ----------------- CONNECT -----------------
 
@@ -30,7 +31,10 @@ def _dsn_from_env() -> str:
 
 
 def get_conn():
-    return psycopg2.connect(_dsn_from_env())
+    return psycopg2.connect(
+        _dsn_from_env(),
+        options=f"-c search_path={DEFAULT_SCHEMA},public",
+    )
 
 
 # ----------------- USERS -----------------

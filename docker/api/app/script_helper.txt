@@ -1,0 +1,142 @@
+# USERS
+python tacacs_db.py user-get <username>
+python tacacs_db.py user-put <username> <password_hash> [--full-name <name>] [--is-active true|false]
+python tacacs_db.py user-delete <username>
+python tacacs_db.py user-list
+
+# USER GROUPS
+python tacacs_db.py usergroup-get <group_name>
+python tacacs_db.py usergroup-put <group_name> [--description <text>]
+python tacacs_db.py usergroup-delete <group_name>
+python tacacs_db.py usergroup-list
+
+# USER GROUP MEMBERS
+python tacacs_db.py usergroup-member-add <username> <group_name>
+python tacacs_db.py usergroup-member-remove <username> <group_name>
+python tacacs_db.py usergroup-member-list [--username <username>] [--group_name <group_name>]
+
+# HOSTS (DEVICES)
+python tacacs_db.py host-put <ip_address> <tacacs_key> [--hostname <name>] [--description <text>]
+python tacacs_db.py host-get-ip <ip_address>
+python tacacs_db.py host-get-name <hostname>
+python tacacs_db.py host-delete <ip_address>
+python tacacs_db.py host-list
+
+# HOST GROUPS
+python tacacs_db.py hostgroup-get <group_name>
+python tacacs_db.py hostgroup-put <group_name> [--description <text>]
+python tacacs_db.py hostgroup-delete <group_name>
+python tacacs_db.py hostgroup-list
+
+# HOST GROUP MEMBERS
+python tacacs_db.py hostgroup-member-add <ip_address> <group_name>
+python tacacs_db.py hostgroup-member-remove <ip_address> <group_name>
+python tacacs_db.py hostgroup-member-list [--ip_address <ip>] [--group_name <group_name>]
+
+# ACCESS POLICIES
+python tacacs_db.py policy-put <user_group_name> <host_group_name> [--priv-lvl <0-15>] [--allow-access true|false]
+python tacacs_db.py policy-get <policy_id>
+python tacacs_db.py policy-delete <policy_id>
+python tacacs_db.py policy-list
+
+# COMMAND RULES
+python tacacs_db.py cmdrule-put <policy_id> <command_pattern> [--action PERMIT|DENY]
+python tacacs_db.py cmdrule-get <rule_id>
+python tacacs_db.py cmdrule-delete <rule_id>
+python tacacs_db.py cmdrule-list <policy_id>
+
+# TOTP
+python tacacs_db.py totp-put <username> [--issuer <name>] [--digits 6] [--period 30] [--is-enabled true|false]
+python tacacs_db.py totp-get <username>
+python tacacs_db.py totp-disable <username>
+python tacacs_db.py totp-delete <username>
+python tacacs_db.py totp-verify <username> <token> [--digits 6] [--period 30] [--window 1]
+
+# USER → ACCESSIBLE HOSTS
+python tacacs_db.py user-hosts <username>
+
+
+# API (curl)
+# BASE_URL can be changed if needed (for example, http://tacacs-api:8000 inside Docker network)
+BASE_URL=http://localhost:8000
+
+# USERS
+curl -X GET "$BASE_URL/users"
+curl -X GET "$BASE_URL/users/<username>"
+curl -X POST "$BASE_URL/users" -H "Content-Type: application/json" \
+  -d '{"username":"<username>","password":"<password>","full_name":"<name>","is_active":true}'
+curl -X PUT "$BASE_URL/users/<username>" -H "Content-Type: application/json" \
+  -d '{"password":"<password>","full_name":"<name>","is_active":true}'
+curl -X DELETE "$BASE_URL/users/<username>"
+
+# USER GROUPS
+curl -X GET "$BASE_URL/user-groups"
+curl -X GET "$BASE_URL/user-groups/<group_name>"
+curl -X POST "$BASE_URL/user-groups" -H "Content-Type: application/json" \
+  -d '{"group_name":"<group_name>","description":"<description>"}'
+curl -X PUT "$BASE_URL/user-groups/<group_name>" -H "Content-Type: application/json" \
+  -d '{"group_name":"<group_name>","description":"<description>"}'
+curl -X DELETE "$BASE_URL/user-groups/<group_name>"
+
+# USER GROUP MEMBERS
+curl -X POST "$BASE_URL/user-group-members" -H "Content-Type: application/json" \
+  -d '{"username":"<username>","group_name":"<group_name>"}'
+curl -X DELETE "$BASE_URL/user-group-members" -H "Content-Type: application/json" \
+  -d '{"username":"<username>","group_name":"<group_name>"}'
+curl -X GET "$BASE_URL/user-group-members"
+curl -X GET "$BASE_URL/user-group-members?username=<username>"
+curl -X GET "$BASE_URL/user-group-members?group_name=<group_name>"
+
+# HOSTS (DEVICES)
+curl -X GET "$BASE_URL/hosts"
+curl -X GET "$BASE_URL/hosts/<ip_address>"
+curl -X GET "$BASE_URL/hosts/by-name/<hostname>"
+curl -X POST "$BASE_URL/hosts" -H "Content-Type: application/json" \
+  -d '{"ip_address":"<ip_address>","tacacs_key":"<key>","hostname":"<hostname>","description":"<description>"}'
+curl -X PUT "$BASE_URL/hosts/<ip_address>" -H "Content-Type: application/json" \
+  -d '{"tacacs_key":"<key>","hostname":"<hostname>","description":"<description>"}'
+curl -X DELETE "$BASE_URL/hosts/<ip_address>"
+
+# HOST GROUPS
+curl -X GET "$BASE_URL/host-groups"
+curl -X GET "$BASE_URL/host-groups/<group_name>"
+curl -X POST "$BASE_URL/host-groups" -H "Content-Type: application/json" \
+  -d '{"group_name":"<group_name>","description":"<description>"}'
+curl -X PUT "$BASE_URL/host-groups/<group_name>" -H "Content-Type: application/json" \
+  -d '{"group_name":"<group_name>","description":"<description>"}'
+curl -X DELETE "$BASE_URL/host-groups/<group_name>"
+
+# HOST GROUP MEMBERS
+curl -X POST "$BASE_URL/host-group-members" -H "Content-Type: application/json" \
+  -d '{"ip_address":"<ip_address>","group_name":"<group_name>"}'
+curl -X DELETE "$BASE_URL/host-group-members" -H "Content-Type: application/json" \
+  -d '{"ip_address":"<ip_address>","group_name":"<group_name>"}'
+curl -X GET "$BASE_URL/host-group-members"
+curl -X GET "$BASE_URL/host-group-members?ip_address=<ip_address>"
+curl -X GET "$BASE_URL/host-group-members?group_name=<group_name>"
+
+# ACCESS POLICIES
+curl -X GET "$BASE_URL/policies"
+curl -X GET "$BASE_URL/policies/<policy_id>"
+curl -X POST "$BASE_URL/policies" -H "Content-Type: application/json" \
+  -d '{"user_group_name":"<user_group>","host_group_name":"<host_group>","priv_lvl":15,"allow_access":true}'
+curl -X DELETE "$BASE_URL/policies/<policy_id>"
+
+# COMMAND RULES
+curl -X GET "$BASE_URL/policies/<policy_id>/command-rules"
+curl -X POST "$BASE_URL/policies/<policy_id>/command-rules" -H "Content-Type: application/json" \
+  -d '{"command_pattern":"^show .*","action":"PERMIT"}'
+curl -X GET "$BASE_URL/command-rules/<rule_id>"
+curl -X DELETE "$BASE_URL/command-rules/<rule_id>"
+
+# TOTP
+curl -X POST "$BASE_URL/users/<username>/totp" -H "Content-Type: application/json" \
+  -d '{"issuer":"tacacs-plus","digits":6,"period":30,"is_enabled":true}'
+curl -X GET "$BASE_URL/users/<username>/totp"
+curl -X POST "$BASE_URL/users/<username>/totp/disable"
+curl -X DELETE "$BASE_URL/users/<username>/totp"
+curl -X POST "$BASE_URL/users/<username>/totp/verify" -H "Content-Type: application/json" \
+  -d '{"token":"<token>","digits":6,"period":30,"valid_window":1}'
+
+# USER → ACCESSIBLE HOSTS
+curl -X GET "$BASE_URL/users/<username>/hosts"

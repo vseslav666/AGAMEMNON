@@ -1,0 +1,1565 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TACACS Ops Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Mono:wght@400;500&family=Rubik:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0c1112;
+        --bg-2: #11181a;
+        --panel: #151d20;
+        --panel-2: #0f1517;
+        --ink: #f4f6f2;
+        --muted: #9aa3a4;
+        --accent: #f1b94b;
+        --accent-2: #2ed3c6;
+        --danger: #f26a5a;
+        --warn: #f2c06b;
+        --ok: #64d18d;
+        --line: rgba(255, 255, 255, 0.08);
+        --shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+        --radius-xl: 24px;
+        --radius-lg: 16px;
+        --radius-md: 12px;
+        --radius-sm: 8px;
+        --mono: "IBM Plex Mono", "SFMono-Regular", "Menlo", "Monaco",
+          "Liberation Mono", monospace;
+        --sans: "Rubik", "Segoe UI", sans-serif;
+        --condensed: "Barlow Condensed", "Arial Narrow", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: var(--sans);
+        color: var(--ink);
+        background: radial-gradient(circle at 15% 15%, #1b2628, transparent 48%),
+          radial-gradient(circle at 85% 20%, #1a2022, transparent 45%),
+          linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+        min-height: 100vh;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        gap: 22px;
+        padding: 22px;
+      }
+
+      .side {
+        background: linear-gradient(160deg, #12181b 0%, #0b1012 100%);
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+        padding: 22px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        position: sticky;
+        top: 20px;
+        height: calc(100vh - 40px);
+      }
+
+      .brand {
+        display: grid;
+        gap: 6px;
+        padding: 8px 10px;
+      }
+
+      .brand span {
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-family: var(--condensed);
+        font-size: 28px;
+        letter-spacing: 0.06em;
+      }
+
+      .nav {
+        display: grid;
+        gap: 8px;
+      }
+
+      .nav a {
+        text-decoration: none;
+        color: var(--muted);
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid transparent;
+        font-size: 14px;
+        transition: all 0.2s ease;
+      }
+
+      .nav a.active,
+      .nav a:hover {
+        color: var(--ink);
+        border-color: rgba(241, 185, 75, 0.4);
+        background: rgba(241, 185, 75, 0.08);
+      }
+
+      .env {
+        margin-top: auto;
+        background: var(--panel-2);
+        border-radius: var(--radius-md);
+        padding: 12px;
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .content {
+        display: grid;
+        gap: 18px;
+      }
+
+      .topbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .topbar h2 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 600;
+      }
+
+      .search {
+        flex: 1;
+        min-width: 240px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+      }
+
+      .search input {
+        background: transparent;
+        border: none;
+        outline: none;
+        color: var(--ink);
+        width: 100%;
+        font-size: 14px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .btn {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--ink);
+        padding: 10px 16px;
+        border-radius: 999px;
+        font-size: 13px;
+        cursor: pointer;
+        transition: transform 0.2s ease, border-color 0.2s ease;
+      }
+
+      .btn.primary {
+        background: linear-gradient(120deg, #f1b94b, #f9d781);
+        color: #1b1c16;
+        border-color: transparent;
+      }
+
+      .btn:hover {
+        transform: translateY(-1px);
+        border-color: rgba(255, 255, 255, 0.2);
+      }
+
+      .alert {
+        display: none;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--line);
+        background: var(--panel);
+        font-size: 13px;
+      }
+
+      .alert.visible {
+        display: flex;
+      }
+
+      .alert.ok {
+        border-color: rgba(100, 209, 141, 0.4);
+        color: var(--ok);
+        background: rgba(100, 209, 141, 0.08);
+      }
+
+      .alert.error {
+        border-color: rgba(242, 106, 90, 0.4);
+        color: var(--danger);
+        background: rgba(242, 106, 90, 0.12);
+      }
+
+      .form {
+        display: grid;
+        gap: 12px;
+      }
+
+      .form-row {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      }
+
+      .field {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .field input,
+      .field select,
+      .field textarea {
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.02);
+        color: var(--ink);
+        font-size: 13px;
+      }
+
+      .field input::placeholder,
+      .field textarea::placeholder {
+        color: rgba(255, 255, 255, 0.35);
+      }
+
+      .form-help {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .divider {
+        height: 1px;
+        background: var(--line);
+        margin: 8px 0;
+      }
+
+      .hero {
+        background: linear-gradient(135deg, #192225 0%, #0f1518 70%);
+        border-radius: var(--radius-xl);
+        border: 1px solid var(--line);
+        padding: 22px;
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 18px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          120deg,
+          rgba(46, 211, 198, 0.12),
+          transparent 55%
+        );
+        pointer-events: none;
+      }
+
+      .hero h3 {
+        margin: 0 0 8px;
+        font-family: var(--condensed);
+        font-size: 26px;
+        letter-spacing: 0.04em;
+      }
+
+      .hero p {
+        margin: 0 0 12px;
+        color: var(--muted);
+        max-width: 540px;
+      }
+
+      .tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 12px;
+      }
+
+      .tag {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(46, 211, 198, 0.12);
+        color: var(--accent-2);
+        border: 1px solid rgba(46, 211, 198, 0.3);
+      }
+
+      .hero-card {
+        background: rgba(10, 14, 15, 0.75);
+        border-radius: var(--radius-lg);
+        padding: 16px;
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 10px;
+      }
+
+      .hero-card h4 {
+        margin: 0;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.2em;
+        color: var(--muted);
+      }
+
+      .hero-card strong {
+        font-size: 24px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 14px;
+      }
+
+      .grid.stats {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .grid.screens {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .card {
+        background: var(--panel);
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        padding: 16px;
+        box-shadow: var(--shadow);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .card h4 {
+        margin: 0 0 8px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.2em;
+        color: var(--muted);
+      }
+
+      .card .value {
+        font-size: 22px;
+        font-weight: 600;
+      }
+
+      .table-card {
+        padding: 16px;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .chip.url {
+        text-transform: none;
+        letter-spacing: 0;
+        font-family: var(--mono);
+      }
+
+      .chip.ok {
+        color: var(--ok);
+        border-color: rgba(100, 209, 141, 0.4);
+        background: rgba(100, 209, 141, 0.1);
+      }
+
+      .chip.warn {
+        color: var(--warn);
+        border-color: rgba(242, 192, 107, 0.35);
+        background: rgba(242, 192, 107, 0.12);
+      }
+
+      .chip.danger {
+        color: var(--danger);
+        border-color: rgba(242, 106, 90, 0.4);
+        background: rgba(242, 106, 90, 0.12);
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 16px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      thead th {
+        text-align: left;
+        color: var(--muted);
+        font-weight: 500;
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      tbody td {
+        padding: 10px 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      }
+
+      tbody tr:hover {
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .mono {
+        font-family: var(--mono);
+      }
+
+      .status {
+        padding: 4px 8px;
+        border-radius: 10px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        border: 1px solid transparent;
+      }
+
+      .status.allow {
+        background: rgba(100, 209, 141, 0.12);
+        color: var(--ok);
+        border-color: rgba(100, 209, 141, 0.4);
+      }
+
+      .status.deny {
+        background: rgba(242, 106, 90, 0.16);
+        color: var(--danger);
+        border-color: rgba(242, 106, 90, 0.4);
+      }
+
+      .list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .list-item {
+        display: grid;
+        gap: 6px;
+        padding: 12px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        font-size: 13px;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .stagger > * {
+        animation: rise 0.6s ease both;
+      }
+
+      .stagger > *:nth-child(2) {
+        animation-delay: 0.1s;
+      }
+
+      .stagger > *:nth-child(3) {
+        animation-delay: 0.2s;
+      }
+
+      .stagger > *:nth-child(4) {
+        animation-delay: 0.3s;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(12px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 1100px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+        .side {
+          position: static;
+          height: auto;
+        }
+        .hero {
+          grid-template-columns: 1fr;
+        }
+        .grid.stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .grid.screens {
+          grid-template-columns: 1fr;
+        }
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .grid.stats {
+          grid-template-columns: 1fr;
+        }
+        .topbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .btn {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="side">
+        <div class="brand">
+          <span>Ops Console</span>
+          <h1>Agamemnon TACACS</h1>
+          <div class="mono">Status: operational</div>
+        </div>
+        <nav class="nav">
+          <a class="active" href="#overview">Overview</a>
+          <a href="#live-auth">Live Auth</a>
+          <a href="#users">Users</a>
+          <a href="#groups">Groups</a>
+          <a href="#hosts">Hosts</a>
+          <a href="#policies">Policies</a>
+          <a href="#command-rules">Command Rules</a>
+          <a href="#totp">TOTP</a>
+          <a href="#audit-feed">Audit Feed</a>
+        </nav>
+        <div class="env">
+          <div>Cluster: core-prod-1</div>
+          <div>Latency: 18ms</div>
+          <div>Alerts: 2 high</div>
+        </div>
+      </aside>
+
+      <main class="content" id="overview">
+        <div class="topbar">
+          <h2>Network Access Operations</h2>
+          <div class="search">
+            <span class="mono">Filter</span>
+            <input type="text" placeholder="user, host, ip, policy..." />
+          </div>
+          <div class="actions">
+            <span id="api-status" class="chip">API: checking</span>
+            <span id="api-base" class="chip url">API: -</span>
+            <button class="btn">Shift: Day</button>
+            <button class="btn">Export CSV</button>
+            <button class="btn primary">Deploy policy</button>
+          </div>
+        </div>
+        <div id="feedback" class="alert" role="status" aria-live="polite"></div>
+
+        <section class="hero stagger">
+          <div>
+            <h3>Live access surface: 1,284 active sessions</h3>
+            <p>
+              Operational posture is stable. Two access anomalies detected in the last
+              hour and isolated to edge routers.
+            </p>
+            <div class="tags">
+              <span class="tag">TOTP coverage 88%</span>
+              <span class="tag">Policy sync: 12s</span>
+              <span class="tag">Change freeze: off</span>
+            </div>
+          </div>
+          <div class="hero-card">
+            <h4>Critical feed</h4>
+            <strong>2 alerts</strong>
+            <div class="chip danger">Edge policy mismatch</div>
+            <div class="chip warn">New host without group</div>
+          </div>
+        </section>
+
+        <section class="grid stats stagger">
+          <div class="card">
+            <h4>Users</h4>
+            <div class="value" id="stat-users">0</div>
+            <div class="chip ok">Active</div>
+          </div>
+          <div class="card">
+            <h4>Groups</h4>
+            <div class="value" id="stat-groups">0</div>
+            <div class="chip">Total</div>
+          </div>
+          <div class="card">
+            <h4>Hosts</h4>
+            <div class="value" id="stat-hosts">0</div>
+            <div class="chip ok">Managed</div>
+          </div>
+          <div class="card">
+            <h4>Policies</h4>
+            <div class="value" id="stat-policies">0</div>
+            <div class="chip warn">Review</div>
+          </div>
+        </section>
+
+        <section id="live-auth" class="layout">
+          <div class="card">
+            <h4>Live command feed</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>User</th>
+                  <th>Host</th>
+                  <th>Command</th>
+                  <th>Result</th>
+                </tr>
+              </thead>
+              <tbody class="mono">
+                <tr>
+                  <td>14:22:11</td>
+                  <td>alice</td>
+                  <td>core-sw-1</td>
+                  <td>show running-config</td>
+                  <td><span class="status allow">Allow</span></td>
+                </tr>
+                <tr>
+                  <td>14:21:44</td>
+                  <td>bruno</td>
+                  <td>edge-rt-3</td>
+                  <td>reload</td>
+                  <td><span class="status deny">Deny</span></td>
+                </tr>
+                <tr>
+                  <td>14:20:32</td>
+                  <td>chandra</td>
+                  <td>dc-fw-2</td>
+                  <td>set firewall policy</td>
+                  <td><span class="status allow">Allow</span></td>
+                </tr>
+                <tr>
+                  <td>14:19:05</td>
+                  <td>devops</td>
+                  <td>edge-rt-4</td>
+                  <td>configure terminal</td>
+                  <td><span class="status allow">Allow</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="card">
+            <h4>Ops queue</h4>
+            <div class="list">
+              <div class="list-item">
+                <div>Investigate host drift: edge-rt-3</div>
+                <div class="chip warn">Due 2h</div>
+              </div>
+              <div class="list-item">
+                <div>Approve temp access: core-sw-1</div>
+                <div class="chip danger">Critical</div>
+              </div>
+              <div class="list-item">
+                <div>Map 6 devices to host groups</div>
+                <div class="chip">Backlog</div>
+              </div>
+              <div class="list-item">
+                <div>Rotate TACACS keys</div>
+                <div class="chip ok">Scheduled</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="users" class="grid screens">
+          <div class="card table-card">
+            <h4>Users</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody id="users-table">
+                <tr>
+                  <td colspan="4" class="muted">Loading users...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h4>Create user</h4>
+            <form id="form-user-create" class="form">
+              <label class="field">
+                <span>Username</span>
+                <input name="username" placeholder="alice" required />
+              </label>
+              <label class="field">
+                <span>Password</span>
+                <input name="password" type="password" placeholder="secret" required />
+              </label>
+              <label class="field">
+                <span>Full name</span>
+                <input name="full_name" placeholder="Alice Chen" />
+              </label>
+              <label class="field">
+                <span>Active</span>
+                <select name="is_active">
+                  <option value="true" selected>True</option>
+                  <option value="false">False</option>
+                </select>
+              </label>
+              <button class="btn primary" type="submit">Create user</button>
+              <div class="form-help">Passwords are hashed server-side via bcrypt.</div>
+            </form>
+          </div>
+        </section>
+
+        <section id="groups" class="grid screens">
+          <div class="card">
+            <h4>User groups</h4>
+            <div class="list" id="user-groups">
+              <div class="list-item">
+                <div>Loading user groups...</div>
+                <div class="chip">Sync</div>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <form id="form-user-group-create" class="form">
+              <div class="form-row">
+                <label class="field">
+                  <span>Group name</span>
+                  <input name="group_name" placeholder="admins" required />
+                </label>
+                <label class="field">
+                  <span>Description</span>
+                  <input name="description" placeholder="Admin access" />
+                </label>
+              </div>
+              <button class="btn primary" type="submit">Create user group</button>
+            </form>
+            <div class="divider"></div>
+            <form id="form-user-group-member" class="form">
+              <div class="form-row">
+                <label class="field">
+                  <span>Username</span>
+                  <input name="username" placeholder="alice" required />
+                </label>
+                <label class="field">
+                  <span>Group name</span>
+                  <input name="group_name" placeholder="admins" required />
+                </label>
+              </div>
+              <button class="btn" type="submit">Add user to group</button>
+            </form>
+          </div>
+          <div class="card">
+            <h4>Host groups</h4>
+            <div class="list" id="host-groups">
+              <div class="list-item">
+                <div>Loading host groups...</div>
+                <div class="chip">Sync</div>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <form id="form-host-group-create" class="form">
+              <div class="form-row">
+                <label class="field">
+                  <span>Group name</span>
+                  <input name="group_name" placeholder="core" required />
+                </label>
+                <label class="field">
+                  <span>Description</span>
+                  <input name="description" placeholder="Core switches" />
+                </label>
+              </div>
+              <button class="btn primary" type="submit">Create host group</button>
+            </form>
+            <div class="divider"></div>
+            <form id="form-host-group-member" class="form">
+              <div class="form-row">
+                <label class="field">
+                  <span>Host IP</span>
+                  <input name="ip_address" placeholder="10.0.0.10" required />
+                </label>
+                <label class="field">
+                  <span>Group name</span>
+                  <input name="group_name" placeholder="core" required />
+                </label>
+              </div>
+              <button class="btn" type="submit">Add host to group</button>
+            </form>
+          </div>
+        </section>
+
+        <section id="hosts" class="grid screens">
+          <div class="card table-card">
+            <h4>Hosts</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th>Host</th>
+                  <th>IP</th>
+                  <th>Group</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody id="hosts-table">
+                <tr>
+                  <td colspan="4" class="muted">Loading hosts...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h4>Create host</h4>
+            <form id="form-host-create" class="form">
+              <label class="field">
+                <span>IP address</span>
+                <input name="ip_address" placeholder="10.0.0.10" required />
+              </label>
+              <label class="field">
+                <span>TACACS key</span>
+                <input name="tacacs_key" placeholder="secret" required />
+              </label>
+              <label class="field">
+                <span>Hostname</span>
+                <input name="hostname" placeholder="core-sw-1" />
+              </label>
+              <label class="field">
+                <span>Description</span>
+                <input name="description" placeholder="Core switch" />
+              </label>
+              <button class="btn primary" type="submit">Create host</button>
+            </form>
+          </div>
+        </section>
+
+        <section id="policies" class="grid screens">
+          <div class="card table-card">
+            <h4>Access policies</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th>Policy</th>
+                  <th>User group</th>
+                  <th>Host group</th>
+                  <th>Privilege</th>
+                  <th>Access</th>
+                </tr>
+              </thead>
+              <tbody id="policies-table">
+                <tr>
+                  <td colspan="5" class="muted">Loading policies...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h4>Create policy</h4>
+            <form id="form-policy-create" class="form">
+              <div class="form-row">
+                <label class="field">
+                  <span>User group</span>
+                  <input name="user_group_name" placeholder="admins" required />
+                </label>
+                <label class="field">
+                  <span>Host group</span>
+                  <input name="host_group_name" placeholder="core" required />
+                </label>
+              </div>
+              <div class="form-row">
+                <label class="field">
+                  <span>Privilege (0-15)</span>
+                  <input name="priv_lvl" type="number" min="0" max="15" value="1" />
+                </label>
+                <label class="field">
+                  <span>Allow access</span>
+                  <select name="allow_access">
+                    <option value="true" selected>True</option>
+                    <option value="false">False</option>
+                  </select>
+                </label>
+              </div>
+              <button class="btn primary" type="submit">Create policy</button>
+            </form>
+          </div>
+        </section>
+
+        <section id="command-rules" class="grid screens">
+          <div class="card table-card">
+            <h4>Command rules</h4>
+            <form id="form-command-rules-load" class="form">
+              <div class="form-row">
+                <label class="field">
+                  <span>Policy ID</span>
+                  <input name="policy_id" type="number" min="1" placeholder="1" required />
+                </label>
+                <label class="field">
+                  <span>Action</span>
+                  <select name="action">
+                    <option value="PERMIT">PERMIT</option>
+                    <option value="DENY">DENY</option>
+                  </select>
+                </label>
+              </div>
+              <label class="field">
+                <span>Command pattern</span>
+                <input name="command_pattern" placeholder="^show .*" required />
+              </label>
+              <div class="form-row">
+                <button class="btn" type="button" id="btn-load-rules">
+                  Load rules
+                </button>
+                <button class="btn primary" type="submit">
+                  Create rule
+                </button>
+              </div>
+            </form>
+            <div class="divider"></div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>Policy</th>
+                  <th>Pattern</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="command-rules-table">
+                <tr>
+                  <td colspan="4" class="muted">Load rules by policy ID.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h4>Rule guidance</h4>
+            <div class="list">
+              <div class="list-item">
+                <div>Use anchored regex patterns</div>
+                <div class="chip">Example: ^show .* </div>
+              </div>
+              <div class="list-item">
+                <div>Keep DENY rules explicit</div>
+                <div class="chip warn">Audit ready</div>
+              </div>
+              <div class="list-item">
+                <div>Policy ID must exist</div>
+                <div class="chip">Required</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="totp" class="grid screens">
+          <div class="card">
+            <h4>TOTP coverage</h4>
+            <div class="list">
+              <div class="list-item">
+                <div>Users with TOTP enabled</div>
+                <div class="chip ok">88%</div>
+              </div>
+              <div class="list-item">
+                <div>Users pending enrollment</div>
+                <div class="chip warn">12</div>
+              </div>
+              <div class="list-item">
+                <div>Recent verification failures</div>
+                <div class="chip danger">3</div>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <form id="form-totp-create" class="form">
+              <label class="field">
+                <span>Username</span>
+                <input name="username" placeholder="alice" required />
+              </label>
+              <div class="form-row">
+                <label class="field">
+                  <span>Issuer</span>
+                  <input name="issuer" placeholder="tacacs-plus" />
+                </label>
+                <label class="field">
+                  <span>Digits</span>
+                  <input name="digits" type="number" min="4" max="10" value="6" />
+                </label>
+              </div>
+              <div class="form-row">
+                <label class="field">
+                  <span>Period (sec)</span>
+                  <input name="period" type="number" min="10" max="300" value="30" />
+                </label>
+                <label class="field">
+                  <span>Enabled</span>
+                  <select name="is_enabled">
+                    <option value="true" selected>True</option>
+                    <option value="false">False</option>
+                  </select>
+                </label>
+              </div>
+              <button class="btn primary" type="submit">Create or update TOTP</button>
+            </form>
+          </div>
+          <div class="card" id="audit-feed">
+            <h4>Audit feed</h4>
+            <div class="list">
+              <div class="list-item">
+                <div class="mono">14:11 WARN</div>
+                <div>Unauthorized command attempt</div>
+              </div>
+              <div class="list-item">
+                <div class="mono">14:02 OK</div>
+                <div>New policy applied to core</div>
+              </div>
+              <div class="list-item">
+                <div class="mono">13:58 OK</div>
+                <div>User alice enrolled in TOTP</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const resolveApiBase = () => {
+        if (window.API_BASE_URL) {
+          return String(window.API_BASE_URL).replace(/\/+$/, "");
+        }
+        const params = new URLSearchParams(window.location.search);
+        const param = params.get("api");
+        if (param && param.trim()) {
+          return param.trim().replace(/\/+$/, "");
+        }
+        return "http://localhost:8000";
+      };
+
+      const API_BASE = resolveApiBase();
+      const statusEl = document.getElementById("api-status");
+      const baseEl = document.getElementById("api-base");
+      const feedbackEl = document.getElementById("feedback");
+
+      const fallback = {
+        users: [
+          { username: "alice", full_name: "Alice Chen", is_active: true },
+          { username: "bruno", full_name: "Bruno Silva", is_active: false },
+          { username: "chandra", full_name: "Chandra Rao", is_active: true },
+        ],
+        userGroups: [
+          { group_name: "admins", description: "Admin access" },
+          { group_name: "netops", description: "Network ops" },
+        ],
+        hostGroups: [
+          { group_name: "core", description: "Core switches" },
+          { group_name: "edge", description: "Edge routers" },
+        ],
+        hosts: [
+          {
+            hostname: "core-sw-1",
+            ip_address: "10.0.0.10",
+            description: "Core switch",
+          },
+          {
+            hostname: "edge-rt-3",
+            ip_address: "10.0.1.21",
+            description: "Edge router",
+          },
+        ],
+        policies: [
+          {
+            policy_id: 1,
+            user_group_name: "admins",
+            host_group_name: "core",
+            priv_lvl: 15,
+            allow_access: true,
+          },
+          {
+            policy_id: 2,
+            user_group_name: "guest",
+            host_group_name: "lab",
+            priv_lvl: 1,
+            allow_access: false,
+          },
+        ],
+      };
+
+      const abortableFetch = async (path) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4000);
+        try {
+          const response = await fetch(`${API_BASE}${path}`, {
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            return null;
+          }
+          return await response.json();
+        } catch (error) {
+          return null;
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
+      const apiRequest = async (path, options = {}) => {
+        const headers = options.headers || {};
+        if (options.body && !headers["Content-Type"]) {
+          headers["Content-Type"] = "application/json";
+        }
+        try {
+          const response = await fetch(`${API_BASE}${path}`, {
+            ...options,
+            headers,
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data.success === false) {
+            const detail =
+              data.detail || data.error || data.reason || response.statusText;
+            throw new Error(detail || "Request failed");
+          }
+          return data;
+        } catch (error) {
+          showFeedback(error.message || "Request failed", "error");
+          return null;
+        }
+      };
+
+      const normalizeList = (payload) => {
+        if (!payload) return [];
+        if (Array.isArray(payload)) return payload;
+        if (payload.success && Array.isArray(payload.data)) return payload.data;
+        return [];
+      };
+
+      const resolveList = (payload, fallbackList) => {
+        if (!payload || payload.success === false) return fallbackList;
+        return normalizeList(payload);
+      };
+
+      let feedbackTimer = null;
+      const showFeedback = (message, type) => {
+        if (!feedbackEl) return;
+        feedbackEl.classList.remove("ok", "error", "visible");
+        feedbackEl.textContent = message;
+        feedbackEl.classList.add("visible", type);
+        if (feedbackTimer) {
+          clearTimeout(feedbackTimer);
+        }
+        feedbackTimer = setTimeout(() => {
+          feedbackEl.classList.remove("visible");
+        }, 4000);
+      };
+
+      const setStatus = (healthy) => {
+        statusEl.classList.remove("ok", "danger");
+        if (healthy) {
+          statusEl.textContent = "API: online";
+          statusEl.classList.add("ok");
+        } else {
+          statusEl.textContent = "API: offline";
+          statusEl.classList.add("danger");
+        }
+      };
+
+      if (baseEl) {
+        baseEl.textContent = `Base: ${API_BASE}`;
+      }
+
+      const renderUsers = (users) => {
+        const tbody = document.getElementById("users-table");
+        tbody.innerHTML = "";
+        if (!users.length) {
+          tbody.innerHTML =
+            '<tr><td colspan="4" class="muted">No users found</td></tr>';
+          return;
+        }
+        users.slice(0, 8).forEach((user) => {
+          const active =
+            user.is_active !== undefined ? user.is_active : user.enabled;
+          const status = active ? "ACTIVE" : "DISABLED";
+          const created = user.created_at
+            ? new Date(user.created_at).toLocaleDateString()
+            : "n/a";
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td class="mono">${user.username || "n/a"}</td>
+            <td>${user.full_name || "-"}</td>
+            <td><span class="chip ${active ? "ok" : "danger"}">${status}</span></td>
+            <td>${created}</td>
+          `;
+          tbody.appendChild(row);
+        });
+      };
+
+      const renderGroups = (groups, targetId) => {
+        const container = document.getElementById(targetId);
+        container.innerHTML = "";
+        if (!groups.length) {
+          container.innerHTML =
+            '<div class="list-item"><div>No groups found</div><div class="chip">Empty</div></div>';
+          return;
+        }
+        groups.slice(0, 6).forEach((group) => {
+          const item = document.createElement("div");
+          item.className = "list-item";
+          item.innerHTML = `
+            <div>${group.group_name || "n/a"}</div>
+            <div class="chip">${group.description || "No description"}</div>
+          `;
+          container.appendChild(item);
+        });
+      };
+
+      const renderHosts = (hosts) => {
+        const tbody = document.getElementById("hosts-table");
+        tbody.innerHTML = "";
+        if (!hosts.length) {
+          tbody.innerHTML =
+            '<tr><td colspan="4" class="muted">No hosts found</td></tr>';
+          return;
+        }
+        hosts.slice(0, 8).forEach((host) => {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td>${host.hostname || "-"}</td>
+            <td class="mono">${host.ip_address || "n/a"}</td>
+            <td>${host.group_name || "unassigned"}</td>
+            <td>${host.description || "-"}</td>
+          `;
+          tbody.appendChild(row);
+        });
+      };
+
+      const renderPolicies = (policies) => {
+        const tbody = document.getElementById("policies-table");
+        tbody.innerHTML = "";
+        if (!policies.length) {
+          tbody.innerHTML =
+            '<tr><td colspan="5" class="muted">No policies found</td></tr>';
+          return;
+        }
+        policies.slice(0, 8).forEach((policy) => {
+          const access = policy.allow_access ? "ALLOW" : "DENY";
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td class="mono">#${policy.policy_id || "-"}</td>
+            <td>${policy.user_group_name || "-"}</td>
+            <td>${policy.host_group_name || "-"}</td>
+            <td>${policy.priv_lvl ?? "-"}</td>
+            <td><span class="chip ${policy.allow_access ? "ok" : "danger"}">${access}</span></td>
+          `;
+          tbody.appendChild(row);
+        });
+      };
+
+      const renderCommandRules = (rules, policyId) => {
+        const tbody = document.getElementById("command-rules-table");
+        tbody.innerHTML = "";
+        if (!rules.length) {
+          tbody.innerHTML =
+            '<tr><td colspan="4" class="muted">No rules for this policy.</td></tr>';
+          return;
+        }
+        rules.slice(0, 10).forEach((rule) => {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td class="mono">#${rule.rule_id || "-"}</td>
+            <td class="mono">${policyId}</td>
+            <td>${rule.command_pattern || "-"}</td>
+            <td><span class="chip ${rule.action === "DENY" ? "danger" : "ok"}">${rule.action || "-"}</span></td>
+          `;
+          tbody.appendChild(row);
+        });
+      };
+
+      const loadCommandRules = async (policyId) => {
+        if (!policyId) return;
+        const data = await apiRequest(`/policies/${policyId}/command-rules`, {
+          method: "GET",
+        });
+        if (!data) return;
+        const rules = normalizeList(data);
+        renderCommandRules(rules, policyId);
+      };
+
+      const updateStats = (users, userGroups, hostGroups, hosts, policies) => {
+        const setValue = (id, value) => {
+          const el = document.getElementById(id);
+          if (el) el.textContent = String(value);
+        };
+        setValue("stat-users", users.length);
+        setValue("stat-groups", userGroups.length + hostGroups.length);
+        setValue("stat-hosts", hosts.length);
+        setValue("stat-policies", policies.length);
+      };
+
+      const setFormBusy = (form, busy) => {
+        if (!form) return;
+        const elements = form.querySelectorAll("input, select, textarea, button");
+        elements.forEach((el) => {
+          el.disabled = busy;
+        });
+      };
+
+      const getValue = (form, name) => {
+        const field = form.elements[name];
+        if (!field) return "";
+        return String(field.value || "").trim();
+      };
+
+      const bindForm = (id, handler) => {
+        const form = document.getElementById(id);
+        if (!form) return;
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          setFormBusy(form, true);
+          const ok = await handler(form);
+          setFormBusy(form, false);
+          if (ok) {
+            form.reset();
+          }
+        });
+      };
+
+      const loadData = async () => {
+        const health = await abortableFetch("/health");
+        setStatus(health && health.status === "healthy");
+
+        const results = await Promise.allSettled([
+          abortableFetch("/users"),
+          abortableFetch("/user-groups"),
+          abortableFetch("/host-groups"),
+          abortableFetch("/hosts"),
+          abortableFetch("/policies"),
+        ]);
+
+        const [usersRes, userGroupsRes, hostGroupsRes, hostsRes, policiesRes] =
+          results.map((res) => (res.status === "fulfilled" ? res.value : null));
+
+        const users = resolveList(usersRes, fallback.users);
+        const userGroups = resolveList(userGroupsRes, fallback.userGroups);
+        const hostGroups = resolveList(hostGroupsRes, fallback.hostGroups);
+        const hosts = resolveList(hostsRes, fallback.hosts);
+        const policies = resolveList(policiesRes, fallback.policies);
+
+        renderUsers(users);
+        renderGroups(userGroups, "user-groups");
+        renderGroups(hostGroups, "host-groups");
+        renderHosts(hosts);
+        renderPolicies(policies);
+        updateStats(users, userGroups, hostGroups, hosts, policies);
+      };
+
+      bindForm("form-user-create", async (form) => {
+        const payload = {
+          username: getValue(form, "username"),
+          password: getValue(form, "password"),
+          full_name: getValue(form, "full_name") || null,
+          is_active: getValue(form, "is_active") !== "false",
+        };
+        const result = await apiRequest("/users", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result) return false;
+        showFeedback("User created", "ok");
+        await loadData();
+        return true;
+      });
+
+      bindForm("form-user-group-create", async (form) => {
+        const payload = {
+          group_name: getValue(form, "group_name"),
+          description: getValue(form, "description") || null,
+        };
+        const result = await apiRequest("/user-groups", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result) return false;
+        showFeedback("User group created", "ok");
+        await loadData();
+        return true;
+      });
+
+      bindForm("form-host-group-create", async (form) => {
+        const payload = {
+          group_name: getValue(form, "group_name"),
+          description: getValue(form, "description") || null,
+        };
+        const result = await apiRequest("/host-groups", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result) return false;
+        showFeedback("Host group created", "ok");
+        await loadData();
+        return true;
+      });
+
+      bindForm("form-user-group-member", async (form) => {
+        const payload = {
+          username: getValue(form, "username"),
+          group_name: getValue(form, "group_name"),
+        };
+        const result = await apiRequest("/user-group-members", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result) return false;
+        showFeedback("User added to group", "ok");
+        await loadData();
+        return true;
+      });
+
+      bindForm("form-host-group-member", async (form) => {
+        const payload = {
+          ip_address: getValue(form, "ip_address"),
+          group_name: getValue(form, "group_name"),
+        };
+        const result = await apiRequest("/host-group-members", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result) return false;
+        showFeedback("Host added to group", "ok");
+        await loadData();
+        return true;
+      });
+
+      bindForm("form-host-create", async (form) => {
+        const payload = {
+          ip_address: getValue(form, "ip_address"),
+          tacacs_key: getValue(form, "tacacs_key"),
+          hostname: getValue(form, "hostname") || null,
+          description: getValue(form, "description") || null,
+        };
+        const result = await apiRequest("/hosts", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result) return false;
+        showFeedback("Host created", "ok");
+        await loadData();
+        return true;
+      });
+
+      bindForm("form-policy-create", async (form) => {
+        const payload = {
+          user_group_name: getValue(form, "user_group_name"),
+          host_group_name: getValue(form, "host_group_name"),
+          priv_lvl: Number(getValue(form, "priv_lvl") || 1),
+          allow_access: getValue(form, "allow_access") !== "false",
+        };
+        const result = await apiRequest("/policies", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result) return false;
+        showFeedback("Policy created", "ok");
+        await loadData();
+        return true;
+      });
+
+      bindForm("form-totp-create", async (form) => {
+        const username = getValue(form, "username");
+        const payload = {
+          issuer: getValue(form, "issuer") || "tacacs-plus",
+          digits: Number(getValue(form, "digits") || 6),
+          period: Number(getValue(form, "period") || 30),
+          is_enabled: getValue(form, "is_enabled") !== "false",
+        };
+        const result = await apiRequest(`/users/${username}/totp`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (!result) return false;
+        showFeedback("TOTP profile updated", "ok");
+        await loadData();
+        return true;
+      });
+
+      const commandRulesForm = document.getElementById("form-command-rules-load");
+      if (commandRulesForm) {
+        commandRulesForm.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          setFormBusy(commandRulesForm, true);
+          const policyId = getValue(commandRulesForm, "policy_id");
+          const payload = {
+            command_pattern: getValue(commandRulesForm, "command_pattern"),
+            action: getValue(commandRulesForm, "action") || "PERMIT",
+          };
+          const result = await apiRequest(
+            `/policies/${policyId}/command-rules`,
+            {
+              method: "POST",
+              body: JSON.stringify(payload),
+            }
+          );
+          setFormBusy(commandRulesForm, false);
+          if (!result) return;
+          showFeedback("Command rule created", "ok");
+          commandRulesForm.elements.command_pattern.value = "";
+          await loadCommandRules(policyId);
+        });
+      }
+
+      const loadRulesButton = document.getElementById("btn-load-rules");
+      if (loadRulesButton && commandRulesForm) {
+        loadRulesButton.addEventListener("click", async () => {
+          const policyId = getValue(commandRulesForm, "policy_id");
+          if (!policyId) {
+            showFeedback("Enter policy ID to load rules", "error");
+            return;
+          }
+          await loadCommandRules(policyId);
+          showFeedback("Rules loaded", "ok");
+        });
+      }
+
+      loadData();
+    </script>
+  </body>
+</html>
