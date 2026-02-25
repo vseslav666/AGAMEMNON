@@ -1,5 +1,6 @@
 from typing import Optional, List
 from app import tacacs_db
+from app.config_exporter import export_tacacs_data
 
 import bcrypt
 
@@ -62,12 +63,14 @@ class UserCreate(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=1)
     full_name: Optional[str] = None
+    description: Optional[str] = None
     is_active: bool = True
 
 
 class UserUpdate(BaseModel):
     password: Optional[str] = Field(None, min_length=1)
     full_name: Optional[str] = None
+    description: Optional[str] = None
     is_active: Optional[bool] = None
 
 
@@ -91,6 +94,7 @@ class HostUpdate(BaseModel):
 
 class HostGroupCreate(BaseModel):
     group_name: str = Field(..., min_length=1, max_length=64)
+    tacacs_key: Optional[str] = None
     description: Optional[str] = None
 
 
@@ -187,6 +191,7 @@ async def create_user(user: UserCreate):
         username=user.username,
         password_hash=password_hash,
         full_name=user.full_name,
+        description=user.description,
         is_active=user.is_active,
     )
     return handle_result(result)
@@ -205,12 +210,15 @@ async def update_user(username: str, body: UserUpdate):
     user_row = existing["user"]
     password_hash = user_row["password_hash"]
     full_name = user_row.get("full_name")
+    description = user_row.get("description")
     is_active = user_row.get("is_active", True)
 
     if body.password is not None:
         password_hash = hash_password(body.password)
     if body.full_name is not None:
         full_name = body.full_name
+    if body.description is not None:
+        description = body.description
     if body.is_active is not None:
         is_active = body.is_active
 
@@ -218,6 +226,7 @@ async def update_user(username: str, body: UserUpdate):
         username=username,
         password_hash=password_hash,
         full_name=full_name,
+        description=description,
         is_active=is_active,
     )
     return handle_result(result)
@@ -435,6 +444,7 @@ async def get_host_group(group_name: str):
 async def create_host_group(group: HostGroupCreate):
     result = tacacs_db.hostgroup_put(  # type: ignore[attr-defined]
         group_name=group.group_name,
+        tacacs_key=group.tacacs_key,
         description=group.description,
     )
     return handle_result(result)
@@ -444,6 +454,7 @@ async def create_host_group(group: HostGroupCreate):
 async def update_host_group(group_name: str, body: HostGroupCreate):
     result = tacacs_db.hostgroup_put(  # type: ignore[attr-defined]
         group_name=group_name,
+        tacacs_key=body.tacacs_key,
         description=body.description,
     )
     return handle_result(result)
@@ -669,11 +680,8 @@ async def list_user_hosts(username: str):
 
 @app.post("/generate-config/")
 async def generate_config():
-    """
-    Заглушка для генерации конфигурации
-    TODO: Реализовать позже
-    """
-    return {
-        "message": "Configuration generation endpoint - to be implemented",
-        "status": "not_implemented"
-    }
+    """Сгенерировать TACACS include-файлы из БД в общий volume."""
+    try:
+        return export_tacacs_data()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to generate config files: {exc}")

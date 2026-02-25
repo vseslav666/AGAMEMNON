@@ -24,7 +24,7 @@ python tacacs_db.py host-list
 
 # HOST GROUPS
 python tacacs_db.py hostgroup-get <group_name>
-python tacacs_db.py hostgroup-put <group_name> [--description <text>]
+python tacacs_db.py hostgroup-put <group_name> [--tacacs-key <key>] [--description <text>]
 python tacacs_db.py hostgroup-delete <group_name>
 python tacacs_db.py hostgroup-list
 
@@ -101,9 +101,9 @@ curl -X DELETE "$BASE_URL/hosts/<ip_address>"
 curl -X GET "$BASE_URL/host-groups"
 curl -X GET "$BASE_URL/host-groups/<group_name>"
 curl -X POST "$BASE_URL/host-groups" -H "Content-Type: application/json" \
-  -d '{"group_name":"<group_name>","description":"<description>"}'
+  -d '{"group_name":"<group_name>","tacacs_key":"<key>","description":"<description>"}'
 curl -X PUT "$BASE_URL/host-groups/<group_name>" -H "Content-Type: application/json" \
-  -d '{"group_name":"<group_name>","description":"<description>"}'
+  -d '{"group_name":"<group_name>","tacacs_key":"<key>","description":"<description>"}'
 curl -X DELETE "$BASE_URL/host-groups/<group_name>"
 
 # HOST GROUP MEMBERS

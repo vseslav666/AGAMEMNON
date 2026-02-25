@@ -44,25 +44,26 @@ def user_put(
     username: str,
     password_hash: str,
     full_name: Optional[str] = None,
+    description: Optional[str] = None,
     is_active: bool = True,
 ) -> Dict[str, Any]:
     """
     Создать/обновить пользователя.
-    password_hash сюда приходит уже готовым (хэш/cleartext — решаешь снаружи).
     """
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            INSERT INTO users (username, password_hash, full_name, is_active)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO users (username, password_hash, full_name, description, is_active)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (username)
             DO UPDATE SET
               password_hash = EXCLUDED.password_hash,
               full_name     = EXCLUDED.full_name,
+              description   = EXCLUDED.description,
               is_active     = EXCLUDED.is_active
             RETURNING *
             """,
-            (username, password_hash, full_name, is_active),
+            (username, password_hash, full_name, description, is_active),
         )
         row = cur.fetchone()
         return {"success": True, "user": row}
@@ -173,9 +174,12 @@ def usergroup_member_remove(username: str, group_name: str) -> Dict[str, Any]:
         if not g:
             return {"success": False, "error": f"User group '{group_name}' not found"}
 
+        user_id = u[0] if isinstance(u, tuple) else u["user_id"]
+        group_id = g[0] if isinstance(g, tuple) else g["group_id"]
+
         cur.execute(
             "DELETE FROM user_group_members WHERE user_id = %s AND group_id = %s RETURNING user_id",
-            (u["user_id"], g["group_id"]),
+            (user_id, group_id),
         )
         deleted = cur.fetchone() is not None
         return {"success": True, "deleted": deleted}
@@ -294,17 +298,23 @@ def host_list() -> Dict[str, Any]:
 # ----------------- HOST GROUPS -----------------
 
 
-def hostgroup_put(group_name: str, description: Optional[str] = None) -> Dict[str, Any]:
+def hostgroup_put(
+    group_name: str,
+    tacacs_key: Optional[str] = None,
+    description: Optional[str] = None,
+) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            INSERT INTO host_groups (group_name, description)
-            VALUES (%s, %s)
+            INSERT INTO host_groups (group_name, tacacs_key, description)
+            VALUES (%s, %s, %s)
             ON CONFLICT (group_name)
-            DO UPDATE SET description = EXCLUDED.description
+            DO UPDATE SET
+              tacacs_key = EXCLUDED.tacacs_key,
+              description = EXCLUDED.description
             RETURNING *
             """,
-            (group_name, description),
+            (group_name, tacacs_key, description),
         )
         return {"success": True, "group": cur.fetchone()}
 
@@ -373,9 +383,12 @@ def hostgroup_member_remove(ip_address: str, group_name: str) -> Dict[str, Any]:
         if not g:
             return {"success": False, "error": f"Host group '{group_name}' not found"}
 
+        host_id = h[0] if isinstance(h, tuple) else h["host_id"]
+        group_id = g[0] if isinstance(g, tuple) else g["group_id"]
+
         cur.execute(
             "DELETE FROM host_group_members WHERE host_id = %s AND group_id = %s RETURNING host_id",
-            (h["host_id"], g["group_id"]),
+            (host_id, group_id),
         )
         deleted = cur.fetchone() is not None
         return {"success": True, "deleted": deleted}
@@ -632,7 +645,8 @@ def totp_delete(username: str) -> Dict[str, Any]:
         if not u:
             return {"success": False, "error": f"User '{username}' not found"}
 
-        cur.execute("DELETE FROM user_totp WHERE user_id = %s RETURNING user_id", (u["user_id"],))
+        user_id = u[0] if isinstance(u, tuple) else u["user_id"]
+        cur.execute("DELETE FROM user_totp WHERE user_id = %s RETURNING user_id", (user_id,))
         deleted = cur.fetchone() is not None
         return {"success": True, "deleted": deleted}
 
@@ -734,6 +748,7 @@ def main():
     up.add_argument("username")
     up.add_argument("password_hash")
     up.add_argument("--full-name")
+    up.add_argument("--description")
     up.add_argument("--is-active", type=lambda x: x.lower() == "true", default=True)
 
     ud = sub.add_parser("user-delete")
@@ -791,6 +806,7 @@ def main():
 
     hgp = sub.add_parser("hostgroup-put")
     hgp.add_argument("group_name")
+    hgp.add_argument("--tacacs-key")
     hgp.add_argument("--description")
 
     hgd = sub.add_parser("hostgroup-delete")
@@ -875,7 +891,7 @@ def main():
     if args.cmd == "user-get":
         out = user_get(args.username)
     elif args.cmd == "user-put":
-        out = user_put(args.username, args.password_hash, args.full_name, args.is_active)
+        out = user_put(args.username, args.password_hash, args.full_name, args.description, args.is_active)
     elif args.cmd == "user-delete":
         out = user_delete(args.username)
     elif args.cmd == "user-list":
@@ -911,7 +927,7 @@ def main():
     elif args.cmd == "hostgroup-get":
         out = hostgroup_get(args.group_name)
     elif args.cmd == "hostgroup-put":
-        out = hostgroup_put(args.group_name, args.description)
+        out = hostgroup_put(args.group_name, args.tacacs_key, args.description)
     elif args.cmd == "hostgroup-delete":
         out = hostgroup_delete(args.group_name)
     elif args.cmd == "hostgroup-list":

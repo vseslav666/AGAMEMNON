@@ -62,6 +62,7 @@ CREATE TABLE users (
     username VARCHAR(64) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
     full_name VARCHAR(100),
+    description TEXT,
     is_active BOOLEAN DEFAULT TRUE,       -- Флаг "Заблокирован/Активен"
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -82,7 +83,7 @@ CREATE TABLE hosts (
     host_id SERIAL PRIMARY KEY,
     hostname VARCHAR(100),
     ip_address VARCHAR(45) NOT NULL UNIQUE,
-    tacacs_key VARCHAR(100) NOT NULL,
+    tacacs_key VARCHAR(100),
     description TEXT
 );
 -- Критически важный индекс. TACACS демон ищет настройки именно по IP входящего пакета.
@@ -93,6 +94,7 @@ CREATE INDEX idx_hosts_ip ON hosts(ip_address);
 CREATE TABLE host_groups (
     group_id SERIAL PRIMARY KEY,
     group_name VARCHAR(64) NOT NULL UNIQUE,
+    tacacs_key VARCHAR(100),
     description TEXT
 );
 

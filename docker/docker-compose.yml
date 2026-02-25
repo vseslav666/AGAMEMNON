@@ -1,14 +1,36 @@
-version: '3.8'
-
 services:
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    container_name: tacacs_proxy
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs/tls.pem:/etc/nginx/certs/tls.pem:ro
+    restart: unless-stopped
+    depends_on:
+      - tacacs-frontend
+      - tacacs-api
+    networks:
+      - tac_network
+
+  tacacs-frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: tacacs_frontend
+    restart: unless-stopped
+    depends_on:
+      - tacacs-api
+    networks:
+      - tac_network
+
   # FASTAPI TACACS Management API (новый API)
   tacacs-api:
     build: 
       context: ./api
       dockerfile: Dockerfile
     container_name: api
-    ports:
-      - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://admin_pg:supersecret@database:5432/tacacs_db
       - PYTHONPATH=/app
@@ -21,6 +43,8 @@ services:
       retries: 3
     networks:
       - tac_network
+    volumes:
+      - tacacs_generated_data:/etc/tac_plus-ng
     depends_on:
       - postgres
 
@@ -52,6 +76,16 @@ services:
       - "49:49"
     volumes:
       - ./tac_plus_ng/config/tac_plus-ng.cfg:/etc/tac_plus-ng/tac_plus-ng.cfg:ro
+      - tacacs_generated_data:/etc/tac_plus-ng
+      - tacacs_plus_logs:/var/log/tac_plus-ng
+    stdin_open: true
+    tty: true
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f tac_plus-ng >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     networks:
       - tac_network
     restart: unless-stopped
@@ -64,3 +98,5 @@ networks:
 
 volumes:
   tacacs_pg14_data:
+  tacacs_generated_data:
+  tacacs_plus_logs:
