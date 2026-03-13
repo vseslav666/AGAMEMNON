@@ -1,24 +1,28 @@
 import type {
   ApiEnvelope,
-  HostGroupMemberPayload,
-  HostGroupMemberRecord,
-  Host,
-  HostCreatePayload,
-  HostGroup,
-  HostGroupCreatePayload,
-  HostUpdatePayload,
-  Policy,
-  PolicyCreatePayload,
+  DeviceGroupMemberPayload,
+  DeviceGroupMemberRecord,
+  Device,
+  DeviceCreatePayload,
+  DeviceGroup,
+  DeviceGroupCreatePayload,
+  DeviceUpdatePayload,
+  Profile,
+  ProfileCreatePayload,
+  ProfileUpdatePayload,
   User,
   UserCreatePayload,
+  UserProfileMemberPayload,
+  UserProfileMemberRecord,
   UserGroupMemberPayload,
   UserGroupMemberRecord,
-  UserGroup,
-  UserGroupCreatePayload,
   TotpConfigPayload,
   TotpProfile,
+  Vendor,
+  VendorCreatePayload,
   GenerateConfigResponse,
   UserUpdatePayload,
+  TacacsLogResponse,
 } from "@/lib/types/tacacs";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
@@ -121,45 +125,47 @@ export const api = {
     },
   },
 
-  hosts: {
-    list: () => request<{ success: boolean; data: Host[] }>("/hosts"),
-    get: (ipAddress: string) =>
-      request<{ success: boolean; host: Host }>(`/hosts/${encodeURIComponent(ipAddress)}`),
-    create: (payload: HostCreatePayload) =>
-      request<{ success: boolean; host: Host }>("/hosts", {
+  vendors: {
+    list: () => request<{ success: boolean; data: Vendor[] }>("/vendors"),
+    get: (vendorName: string) =>
+      request<{ success: boolean; vendor: Vendor }>(`/vendors/${encodeURIComponent(vendorName)}`),
+    create: (payload: VendorCreatePayload) =>
+      request<{ success: boolean; vendor: Vendor }>("/vendors", {
         method: "POST",
         body: JSON.stringify(payload),
       }),
-    update: (ipAddress: string, payload: HostUpdatePayload) =>
-      request<{ success: boolean; host: Host }>(`/hosts/${encodeURIComponent(ipAddress)}`, {
+    update: (vendorName: string, payload: VendorCreatePayload) =>
+      request<{ success: boolean; vendor: Vendor }>(`/vendors/${encodeURIComponent(vendorName)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      }),
+    delete: (vendorName: string) =>
+      request<void>(`/vendors/${encodeURIComponent(vendorName)}`, {
+        method: "DELETE",
+      }),
+  },
+
+  devices: {
+    list: () => request<{ success: boolean; data: Device[] }>("/devices"),
+    get: (ipAddress: string) =>
+      request<{ success: boolean; device: Device }>(`/devices/${encodeURIComponent(ipAddress)}`),
+    create: (payload: DeviceCreatePayload) =>
+      request<{ success: boolean; device: Device }>("/devices", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    update: (ipAddress: string, payload: DeviceUpdatePayload) =>
+      request<{ success: boolean; device: Device }>(`/devices/${encodeURIComponent(ipAddress)}`, {
         method: "PUT",
         body: JSON.stringify(payload),
       }),
     delete: (ipAddress: string) =>
-      request<void>(`/hosts/${encodeURIComponent(ipAddress)}`, {
+      request<void>(`/devices/${encodeURIComponent(ipAddress)}`, {
         method: "DELETE",
       }),
   },
 
   userGroups: {
-    list: () => request<{ success: boolean; data: UserGroup[] }>("/user-groups"),
-    get: (groupName: string) =>
-      request<{ success: boolean; group: UserGroup }>(`/user-groups/${encodeURIComponent(groupName)}`),
-    create: (payload: UserGroupCreatePayload) =>
-      request<{ success: boolean; group: UserGroup }>("/user-groups", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }),
-    update: (groupName: string, payload: UserGroupCreatePayload) =>
-      request<{ success: boolean; group: UserGroup }>(`/user-groups/${encodeURIComponent(groupName)}`, {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      }),
-    delete: (groupName: string) =>
-      request<void>(`/user-groups/${encodeURIComponent(groupName)}`, {
-        method: "DELETE",
-      }),
-
     members: {
       list: (params?: { username?: string; group_name?: string }) => {
         const query = new URLSearchParams();
@@ -181,22 +187,22 @@ export const api = {
     },
   },
 
-  hostGroups: {
-    list: () => request<{ success: boolean; data: HostGroup[] }>("/host-groups"),
+  deviceGroups: {
+    list: () => request<{ success: boolean; data: DeviceGroup[] }>("/device-groups"),
     get: (groupName: string) =>
-      request<{ success: boolean; group: HostGroup }>(`/host-groups/${encodeURIComponent(groupName)}`),
-    create: (payload: HostGroupCreatePayload) =>
-      request<{ success: boolean; group: HostGroup }>("/host-groups", {
+      request<{ success: boolean; group: DeviceGroup }>(`/device-groups/${encodeURIComponent(groupName)}`),
+    create: (payload: DeviceGroupCreatePayload) =>
+      request<{ success: boolean; group: DeviceGroup }>("/device-groups", {
         method: "POST",
         body: JSON.stringify(payload),
       }),
-    update: (groupName: string, payload: HostGroupCreatePayload) =>
-      request<{ success: boolean; group: HostGroup }>(`/host-groups/${encodeURIComponent(groupName)}`, {
+    update: (groupName: string, payload: DeviceGroupCreatePayload) =>
+      request<{ success: boolean; group: DeviceGroup }>(`/device-groups/${encodeURIComponent(groupName)}`, {
         method: "PUT",
         body: JSON.stringify(payload),
       }),
     delete: (groupName: string) =>
-      request<void>(`/host-groups/${encodeURIComponent(groupName)}`, {
+      request<void>(`/device-groups/${encodeURIComponent(groupName)}`, {
         method: "DELETE",
       }),
 
@@ -206,33 +212,64 @@ export const api = {
         if (params?.ip_address) query.set("ip_address", params.ip_address);
         if (params?.group_name) query.set("group_name", params.group_name);
         const suffix = query.toString() ? `?${query.toString()}` : "";
-        return request<{ success: boolean; data: HostGroupMemberRecord[] }>(`/host-group-members${suffix}`);
+        return request<{ success: boolean; data: DeviceGroupMemberRecord[] }>(`/device-group-members${suffix}`);
       },
-      add: (payload: HostGroupMemberPayload) =>
-        request<{ success: boolean; member: HostGroupMemberRecord | null }>("/host-group-members", {
+      add: (payload: DeviceGroupMemberPayload) =>
+        request<{ success: boolean; member: DeviceGroupMemberRecord | null }>("/device-group-members", {
           method: "POST",
           body: JSON.stringify(payload),
         }),
-      remove: (payload: HostGroupMemberPayload) =>
-        request<void>("/host-group-members", {
+      remove: (payload: DeviceGroupMemberPayload) =>
+        request<void>("/device-group-members", {
           method: "DELETE",
           body: JSON.stringify(payload),
         }),
     },
   },
 
-  policies: {
-    list: () => request<{ success: boolean; data: Policy[] }>("/policies"),
-    get: (policyId: number) => request<{ success: boolean; policy: Policy }>(`/policies/${policyId}`),
-    create: (payload: PolicyCreatePayload) =>
-      request<{ success: boolean; policy: Policy }>("/policies", {
+  profiles: {
+    list: () => request<{ success: boolean; data: Profile[] }>("/profiles"),
+    get: (profileName: string) =>
+      request<{ success: boolean; profile: Profile }>(`/profiles/${encodeURIComponent(profileName)}`),
+    create: (payload: ProfileCreatePayload) =>
+      request<{ success: boolean; profile: Profile }>("/profiles", {
         method: "POST",
         body: JSON.stringify(payload),
       }),
-    delete: (policyId: number) =>
-      request<void>(`/policies/${policyId}`, {
+    update: (profileName: string, payload: ProfileUpdatePayload) =>
+      request<{ success: boolean; profile: Profile }>(`/profiles/${encodeURIComponent(profileName)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          profile_name: profileName,
+          profile_body: payload.profile_body,
+          description: payload.description,
+          is_active: payload.is_active,
+        }),
+      }),
+    delete: (profileName: string) =>
+      request<void>(`/profiles/${encodeURIComponent(profileName)}`, {
         method: "DELETE",
       }),
+
+    userMembers: {
+      list: (params?: { username?: string; profile_name?: string }) => {
+        const query = new URLSearchParams();
+        if (params?.username) query.set("username", params.username);
+        if (params?.profile_name) query.set("profile_name", params.profile_name);
+        const suffix = query.toString() ? `?${query.toString()}` : "";
+        return request<{ success: boolean; data: UserProfileMemberRecord[] }>(`/user-profile-members${suffix}`);
+      },
+      add: (payload: UserProfileMemberPayload) =>
+        request<{ success: boolean; member: UserProfileMemberRecord | null }>("/user-profile-members", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }),
+      remove: (payload: UserProfileMemberPayload) =>
+        request<void>("/user-profile-members", {
+          method: "DELETE",
+          body: JSON.stringify(payload),
+        }),
+    },
   },
 
   config: {
@@ -240,6 +277,11 @@ export const api = {
       request<GenerateConfigResponse>("/generate-config/", {
         method: "POST",
       }),
+  },
+
+  logs: {
+    tacacs: (limit = 200) =>
+      request<TacacsLogResponse>(`/logs/tacacs?limit=${encodeURIComponent(String(limit))}`),
   },
 };
 

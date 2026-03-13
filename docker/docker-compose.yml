@@ -1,7 +1,50 @@
 services:
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: tacacs_docker_socket_proxy
+    environment:
+      - LOG_LEVEL=warning
+      - CONTAINERS=1
+      - EXEC=1
+      - POST=1
+      - PING=1
+      - VERSION=1
+      - EVENTS=0
+      - AUTH=0
+      - SECRETS=0
+      - SERVICES=0
+      - TASKS=0
+      - IMAGES=0
+      - NETWORKS=0
+      - NODES=0
+      - SWARM=0
+      - SYSTEM=0
+      - VOLUMES=0
+      - DISTRIBUTION=0
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - PLUGINS=0
+      - SESSION=0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    read_only: true
+    tmpfs:
+      - /run
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    networks:
+      - tac_network
+
   reverse-proxy:
     image: nginx:1.27-alpine
     container_name: tacacs_proxy
+    environment:
+      - TZ=Europe/Moscow
     ports:
       - "443:443"
     volumes:
@@ -19,6 +62,8 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
     container_name: tacacs_frontend
+    environment:
+      - TZ=Europe/Moscow
     restart: unless-stopped
     depends_on:
       - tacacs-api
@@ -35,6 +80,9 @@ services:
       - DATABASE_URL=postgresql://admin_pg:supersecret@database:5432/tacacs_db
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
+      - TZ=Europe/Moscow
+      - RELOADER_SOCKET_PATH=/run/tacacs-reloader/reloader.sock
+      - RELOADER_APPLY_TIMEOUT=30
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -45,8 +93,11 @@ services:
       - tac_network
     volumes:
       - tacacs_generated_data:/etc/tac_plus-ng
+      - ./tac_plus_ng/logs/tac_plus-ng.log:/var/log/tac_plus-ng/tac_plus-ng.log:ro
+      - tacacs_reloader_socket:/run/tacacs-reloader
     depends_on:
       - postgres
+      - tacacs-reloader
 
   # PostgreSQL база данных
   postgres:
@@ -56,6 +107,8 @@ services:
       POSTGRES_USER: admin_pg
       POSTGRES_PASSWORD: supersecret
       POSTGRES_DB: tacacs_db
+      TZ: Europe/Moscow
+      PGTZ: Europe/Moscow
     ports:
       - "5432:5432"
     volumes:
@@ -72,12 +125,14 @@ services:
       dockerfile: Dockerfile
     container_name: tacacs_plus
     hostname: tacacs_plus
+    environment:
+      - TZ=Europe/Moscow
     ports:
       - "49:49"
     volumes:
       - ./tac_plus_ng/config/tac_plus-ng.cfg:/etc/tac_plus-ng/tac_plus-ng.cfg:ro
       - tacacs_generated_data:/etc/tac_plus-ng
-      - tacacs_plus_logs:/var/log/tac_plus-ng
+      - ./tac_plus_ng/logs/tac_plus-ng.log:/var/log/tac_plus-ng/tac_plus-ng.log
     stdin_open: true
     tty: true
     healthcheck:
@@ -89,8 +144,40 @@ services:
     networks:
       - tac_network
     restart: unless-stopped
+
+  tacacs-reloader:
+    build:
+      context: ./reloader
+      dockerfile: Dockerfile
+    container_name: tacacs_reloader
+    environment:
+      - WATCH_DIR=/etc/tac_plus-ng
+      - POLL_INTERVAL=2
+      - RELOADER_FILES=users,user_groups,devices,profiles,ruleset
+      - TARGET_CONTAINER=tacacs_plus
+      - RESTART_TIMEOUT=3
+      - VALIDATION_CMD=tac_plus-ng -P /etc/tac_plus-ng/tac_plus-ng.cfg
+      - RELOADER_SOCKET_PATH=/run/tacacs-reloader/reloader.sock
+      - DOCKER_PROXY_URL=http://docker-socket-proxy:2375
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - TZ=Europe/Moscow
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - tacacs_generated_data:/etc/tac_plus-ng:ro
+      - tacacs_reloader_socket:/run/tacacs-reloader
+    restart: unless-stopped
+    networks:
+      - tac_network
     depends_on:
-      - tacacs-api
+      - tac_plus-ng
+      - docker-socket-proxy
 
 networks:
   tac_network:
@@ -99,4 +186,4 @@ networks:
 volumes:
   tacacs_pg14_data:
   tacacs_generated_data:
-  tacacs_plus_logs:
+  tacacs_reloader_socket:

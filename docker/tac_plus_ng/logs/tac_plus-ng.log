@@ -1,0 +1,14 @@
+2026-03-12 08:53:10 +0000 172.217.76.94	ivanov_ke1	python_tty0	python_device	shell login failed
+2026-03-12 08:53:28 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login denied by ACL
+2026-03-12 08:55:31 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded
+2026-03-12 08:56:26 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded
+2026-03-12 08:56:28 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded
+2026-03-12 08:56:30 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login failed
+2026-03-12 08:56:33 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded
+2026-03-12 09:10:52 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded
+2026-03-12 09:10:53 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded
+2026-03-12 09:10:56 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login failed
+2026-03-12 09:12:42 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login failed
+2026-03-12 09:12:44 +0000 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded
+2026-03-12 12:42:34 +0300 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded
+2026-03-12 13:39:57 +0300 172.217.76.94	ivanov_ke	python_tty0	python_device	shell login succeeded

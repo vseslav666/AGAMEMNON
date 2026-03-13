@@ -1,5 +1,5 @@
 # start with Alpine Linux
-FROM alpine:3.20
+FROM alpine:3.23.3
 
 # system setup with all requirements
 RUN apk add --no-cache \
@@ -14,7 +14,6 @@ RUN apk add --no-cache \
         freeradius-client-dev \
         libretls-dev \
         linux-pam-dev \
-        logrotate \
         nano \
         openssl-dev \
         pcre2-dev \
@@ -24,12 +23,17 @@ RUN apk add --no-cache \
         perl-net-ip \
         perl-sys-syslog \
         procps \
+        py3-pip \
+        python3 \
+        py3-psycopg2 \
         tcpdump \
         tzdata \
         vim \
         wget \
         unzip \
     && echo "! installation is finished !"
+
+RUN pip3 install --no-cache-dir --break-system-packages pyotp
 
 # download and install MarcJHuber event-driven-servers / tac_plus-ng repository
 RUN wget https://github.com/MarcJHuber/event-driven-servers/archive/refs/heads/master.zip -O event-driven-servers-master.zip && \
@@ -53,10 +57,8 @@ RUN printf '%s\n' \
     'alias l="ls -CF"' \
     > /etc/profile.d/qol.sh
 
-# container runtime helpers
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY logrotate/tac_plus-ng /etc/logrotate.d/tac_plus-ng
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY mavis_tacplus_totp.py /usr/local/bin/mavis_tacplus_totp.py
+RUN chmod +x /usr/local/bin/mavis_tacplus_totp.py
 
-# run tac_plus-ng with stdout + file logging
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# run tac_plus-ng directly in foreground with debug output to container logs
+CMD ["/usr/local/sbin/tac_plus-ng", "-d", "5", "/etc/tac_plus-ng/tac_plus-ng.cfg"]

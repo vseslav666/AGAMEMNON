@@ -21,6 +21,12 @@ tacacs-api/
 - Внешний адрес API для браузера: `https://<SERVER_IP>/api/*`
 - Внутренний upstream API: `tacacs-api:8000`
 
+## Изменения по группам пользователей
+
+- CRUD-эндпоинты `user-groups` удалены.
+- Для назначения групп пользователям используется `device_groups` через `user_group_members`.
+- В `user_group_members.group_id` хранится ссылка на `device_groups.group_id`.
+
 Маршрутизация задаётся в [`docker/nginx/default.conf`](docker/nginx/default.conf),
 а запуск сервисов — в [`docker/docker-compose.yml`](docker/docker-compose.yml).
 

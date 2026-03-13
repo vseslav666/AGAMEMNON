@@ -48,100 +48,181 @@ export type TotpProfile = {
   last_used_at?: string | null;
 };
 
-export type Host = {
-  host_id?: number;
+export type Vendor = {
+  vendor_id?: number;
+  vendor_name: string;
+  description?: string | null;
+};
+
+export type VendorCreatePayload = {
+  vendor_name: string;
+  description?: string;
+};
+
+export type Device = {
+  device_id?: number;
   ip_address: string;
   tacacs_key: string;
   hostname?: string | null;
+  vendor_id?: number | null;
+  vendor_name?: string | null;
   description?: string | null;
 };
 
-export type HostCreatePayload = {
+export type DeviceCreatePayload = {
   ip_address: string;
   tacacs_key: string;
   hostname?: string;
+  vendor_name: string;
   description?: string;
 };
 
-export type HostUpdatePayload = {
+export type DeviceUpdatePayload = {
+  new_ip_address?: string;
   tacacs_key?: string;
   hostname?: string;
-  description?: string;
-};
-
-export type UserGroup = {
-  group_id?: number;
-  group_name: string;
-  description?: string | null;
-};
-
-export type UserGroupCreatePayload = {
-  group_name: string;
+  vendor_name?: string;
   description?: string;
 };
 
 export type UserGroupMemberPayload = {
   username: string;
   group_name: string;
+  ro_rw?: number;
 };
 
 export type UserGroupMemberRecord = {
   username: string;
   group_name: string;
+  ro_rw?: number;
 };
 
-export type HostGroup = {
+export type DeviceGroup = {
   group_id?: number;
   group_name: string;
   tacacs_key?: string | null;
   description?: string | null;
 };
 
-export type HostGroupCreatePayload = {
+export type DeviceGroupCreatePayload = {
   group_name: string;
   tacacs_key?: string;
   description?: string;
 };
 
-export type HostGroupMemberPayload = {
+export type DeviceGroupMemberPayload = {
   ip_address: string;
   group_name: string;
 };
 
-export type HostGroupMemberRecord = {
+export type DeviceGroupMemberRecord = {
   ip_address: string;
   group_name: string;
 };
 
-export type Policy = {
-  policy_id?: number;
-  user_group_id?: number;
-  host_group_id?: number;
-  user_group_name: string;
-  host_group_name: string;
-  priv_lvl: number;
-  allow_access: boolean;
+export type Profile = {
+  profile_id?: number;
+  profile_name: string;
+  profile_body: string;
+  description?: string | null;
+  is_active: boolean;
 };
 
-export type PolicyCreatePayload = {
-  user_group_name: string;
-  host_group_name: string;
-  priv_lvl: number;
-  allow_access: boolean;
+export type ProfileCreatePayload = {
+  profile_name: string;
+  profile_body: string;
+  description?: string;
+  is_active: boolean;
+};
+
+export type ProfileUpdatePayload = {
+  profile_body: string;
+  description?: string;
+  is_active: boolean;
+};
+
+export type UserProfileMemberPayload = {
+  username: string;
+  profile_name: string;
+};
+
+export type UserProfileMemberRecord = {
+  username: string;
+  profile_name: string;
 };
 
 export type GeneratedFileMeta = {
-  file: "users" | "hosts" | "host_groups";
+  file: "users" | "user_groups" | "devices" | "profiles" | "ruleset";
   records: number;
+};
+
+export type GenerateApplyResult = {
+  success: boolean;
+  validated: boolean;
+  reloaded: boolean;
+  message?: string;
+  error?: string;
+  validation?: {
+    command: string;
+    exit_code: number | null;
+    stdout?: string;
+    stderr?: string;
+    ok: boolean;
+  };
 };
 
 export type GenerateConfigResponse = {
   success: boolean;
   path: string;
   files: GeneratedFileMeta[];
+  apply?: GenerateApplyResult;
   file_contents: {
     users: string;
-    hosts: string;
-    host_groups: string;
+    user_groups: string;
+    devices: string;
+    profiles: string;
+    ruleset: string;
   };
+};
+
+export type TacacsLogLevel = "error" | "warn" | "info" | "debug" | "unknown";
+
+export type TacacsLogLine = {
+  id: number;
+  raw: string;
+  message: string;
+  timestamp: string | null;
+  session: string | null;
+  host: string | null;
+  level: TacacsLogLevel;
+};
+
+export type TacacsEventKind = "authentication" | "authorization" | "accounting";
+export type TacacsEventResult = "success" | "failure" | "unknown";
+
+export type TacacsLogEvent = {
+  id: number;
+  line_id: number;
+  timestamp: string | null;
+  session: string | null;
+  session_id: string | null;
+  host: string | null;
+  kind: TacacsEventKind;
+  result: TacacsEventResult;
+  message: string;
+  username: string | null;
+  remote_addr: string | null;
+  port: string | null;
+  attrs: Record<string, string>;
+};
+
+export type TacacsLogResponse = {
+  success: boolean;
+  file_path: string;
+  limit: number;
+  total_lines: number;
+  missing: boolean;
+  generated_at: string;
+  lines: TacacsLogLine[];
+  events: TacacsLogEvent[];
 };

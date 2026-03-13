@@ -1,15 +1,23 @@
 import os
 import json
 import argparse
+import atexit
+from contextlib import contextmanager
 from typing import Optional, Dict, Any
 
 from datetime import datetime
 
 import psycopg2
 import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
 import pyotp
 
 DEFAULT_SCHEMA = os.getenv("PGSCHEMA", "tacacs")
+POOL_MIN_CONN = int(os.getenv("PGPOOL_MIN_CONN", "1"))
+POOL_MAX_CONN = int(os.getenv("PGPOOL_MAX_CONN", "10"))
+
+_DB_POOL: Optional[ThreadedConnectionPool] = None
+
 
 # ----------------- CONNECT -----------------
 
@@ -30,11 +38,40 @@ def _dsn_from_env() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
 
 
+def _get_pool() -> ThreadedConnectionPool:
+    global _DB_POOL
+    if _DB_POOL is None:
+        _DB_POOL = ThreadedConnectionPool(
+            POOL_MIN_CONN,
+            POOL_MAX_CONN,
+            dsn=_dsn_from_env(),
+            options=f"-c search_path={DEFAULT_SCHEMA},public",
+        )
+    return _DB_POOL
+
+
+def _close_pool() -> None:
+    global _DB_POOL
+    if _DB_POOL is not None:
+        _DB_POOL.closeall()
+        _DB_POOL = None
+
+
+atexit.register(_close_pool)
+
+
+@contextmanager
 def get_conn():
-    return psycopg2.connect(
-        _dsn_from_env(),
-        options=f"-c search_path={DEFAULT_SCHEMA},public",
-    )
+    pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        pool.putconn(conn)
 
 
 # ----------------- USERS -----------------
@@ -47,9 +84,6 @@ def user_put(
     description: Optional[str] = None,
     is_active: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Создать/обновить пользователя.
-    """
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
@@ -91,72 +125,30 @@ def user_list() -> Dict[str, Any]:
         return {"success": True, "data": cur.fetchall()}
 
 
-# ----------------- USER GROUPS -----------------
-
-
-def usergroup_put(group_name: str, description: Optional[str] = None) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            """
-            INSERT INTO user_groups (group_name, description)
-            VALUES (%s, %s)
-            ON CONFLICT (group_name)
-            DO UPDATE SET description = EXCLUDED.description
-            RETURNING *
-            """,
-            (group_name, description),
-        )
-        return {"success": True, "group": cur.fetchone()}
-
-
-def usergroup_get(group_name: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM user_groups WHERE group_name = %s", (group_name,))
-        row = cur.fetchone()
-        if not row:
-            return {"success": False, "error": f"User group '{group_name}' not found"}
-        return {"success": True, "group": row}
-
-
-def usergroup_delete(group_name: str) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM user_groups WHERE group_name = %s RETURNING group_id",
-            (group_name,),
-        )
-        deleted = cur.fetchone() is not None
-        return {"success": True, "deleted": deleted}
-
-
-def usergroup_list() -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM user_groups ORDER BY group_name")
-        return {"success": True, "data": cur.fetchall()}
-
-
 # ----------------- USER_GROUP_MEMBERS -----------------
 
 
-def usergroup_member_add(username: str, group_name: str) -> Dict[str, Any]:
+def usergroup_member_add(username: str, group_name: str, ro_rw: int = 0) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
         u = cur.fetchone()
         if not u:
             return {"success": False, "error": f"User '{username}' not found"}
 
-        cur.execute("SELECT group_id FROM user_groups WHERE group_name = %s", (group_name,))
+        cur.execute("SELECT group_id FROM device_groups WHERE group_name = %s", (group_name,))
         g = cur.fetchone()
         if not g:
-            return {"success": False, "error": f"User group '{group_name}' not found"}
+            return {"success": False, "error": f"Device group '{group_name}' not found"}
 
         cur.execute(
             """
-            INSERT INTO user_group_members (user_id, group_id)
-            VALUES (%s, %s)
-            ON CONFLICT (user_id, group_id) DO NOTHING
+            INSERT INTO user_group_members (user_id, group_id, ro_rw)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, group_id)
+            DO UPDATE SET ro_rw = EXCLUDED.ro_rw
             RETURNING *
             """,
-            (u["user_id"], g["group_id"]),
+            (u["user_id"], g["group_id"], ro_rw),
         )
         row = cur.fetchone()
         return {"success": True, "member": row}
@@ -169,10 +161,10 @@ def usergroup_member_remove(username: str, group_name: str) -> Dict[str, Any]:
         if not u:
             return {"success": False, "error": f"User '{username}' not found"}
 
-        cur.execute("SELECT group_id FROM user_groups WHERE group_name = %s", (group_name,))
+        cur.execute("SELECT group_id FROM device_groups WHERE group_name = %s", (group_name,))
         g = cur.fetchone()
         if not g:
-            return {"success": False, "error": f"User group '{group_name}' not found"}
+            return {"success": False, "error": f"Device group '{group_name}' not found"}
 
         user_id = u[0] if isinstance(u, tuple) else u["user_id"]
         group_id = g[0] if isinstance(g, tuple) else g["group_id"]
@@ -194,26 +186,26 @@ def usergroup_member_list(username: Optional[str] = None, group_name: Optional[s
                 return {"success": False, "error": f"User '{username}' not found"}
             cur.execute(
                 """
-                SELECT u.username, ug.group_name
+                SELECT u.username, ug.group_name, m.ro_rw
                 FROM user_group_members m
                 JOIN users u ON u.user_id = m.user_id
-                JOIN user_groups ug ON ug.group_id = m.group_id
+                JOIN device_groups ug ON ug.group_id = m.group_id
                 WHERE m.user_id = %s
                 ORDER BY ug.group_name
                 """,
                 (u["user_id"],),
             )
         elif group_name:
-            cur.execute("SELECT group_id FROM user_groups WHERE group_name = %s", (group_name,))
+            cur.execute("SELECT group_id FROM device_groups WHERE group_name = %s", (group_name,))
             g = cur.fetchone()
             if not g:
-                return {"success": False, "error": f"User group '{group_name}' not found"}
+                return {"success": False, "error": f"Device group '{group_name}' not found"}
             cur.execute(
                 """
-                SELECT u.username, ug.group_name
+                SELECT u.username, ug.group_name, m.ro_rw
                 FROM user_group_members m
                 JOIN users u ON u.user_id = m.user_id
-                JOIN user_groups ug ON ug.group_id = m.group_id
+                JOIN device_groups ug ON ug.group_id = m.group_id
                 WHERE m.group_id = %s
                 ORDER BY u.username
                 """,
@@ -222,83 +214,293 @@ def usergroup_member_list(username: Optional[str] = None, group_name: Optional[s
         else:
             cur.execute(
                 """
-                SELECT u.username, ug.group_name
+                SELECT u.username, ug.group_name, m.ro_rw
                 FROM user_group_members m
                 JOIN users u ON u.user_id = m.user_id
-                JOIN user_groups ug ON ug.group_id = m.group_id
+                JOIN device_groups ug ON ug.group_id = m.group_id
                 ORDER BY u.username, ug.group_name
                 """
             )
+        rows = cur.fetchall()
+
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        name = str(row.get("group_name") or "")
+        if name.lower().endswith("_ro"):
+            base_name = name[:-3]
+            mode = 0
+        elif name.lower().endswith("_rw"):
+            base_name = name[:-3]
+            mode = 1
+        else:
+            base_name = name
+            mode = int(row.get("ro_rw") or 0)
+
+        normalized.append(
+            {
+                "username": row.get("username"),
+                "group_name": base_name,
+                "ro_rw": mode,
+            }
+        )
+
+    return {"success": True, "data": normalized}
+
+
+# ----------------- VENDORS -----------------
+
+
+def vendor_put(vendor_name: str, description: Optional[str] = None) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            INSERT INTO vendors (vendor_name, description)
+            VALUES (%s, %s)
+            ON CONFLICT (vendor_name)
+            DO UPDATE SET description = EXCLUDED.description
+            RETURNING *
+            """,
+            (vendor_name, description),
+        )
+        return {"success": True, "vendor": cur.fetchone()}
+
+
+def vendor_get(vendor_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM vendors WHERE vendor_name = %s", (vendor_name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Vendor '{vendor_name}' not found"}
+        return {"success": True, "vendor": row}
+
+
+def vendor_delete(vendor_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM vendors WHERE vendor_name = %s RETURNING vendor_id", (vendor_name,))
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def vendor_list() -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM vendors ORDER BY vendor_name")
         return {"success": True, "data": cur.fetchall()}
 
 
-# ----------------- HOSTS -----------------
+# ----------------- DEVICES -----------------
 
 
-def host_put(
+def _resolve_vendor_id(cur, vendor_name: Optional[str]) -> Optional[int]:
+    name = (vendor_name or "").strip()
+    if not name:
+        return None
+
+    cur.execute("SELECT vendor_id FROM vendors WHERE vendor_name = %s", (name,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError(f"Vendor '{name}' not found")
+    return row["vendor_id"]
+
+
+def device_put(
     ip_address: str,
     tacacs_key: str,
     hostname: Optional[str] = None,
     description: Optional[str] = None,
+    vendor_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Создать/обновить хост по IP.
-    """
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        try:
+            vendor_id = _resolve_vendor_id(cur, vendor_name)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
         cur.execute(
             """
-            INSERT INTO hosts (hostname, ip_address, tacacs_key, description)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO devices (hostname, ip_address, tacacs_key, description, vendor_id)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (ip_address)
             DO UPDATE SET
               hostname   = EXCLUDED.hostname,
               tacacs_key = EXCLUDED.tacacs_key,
-              description= EXCLUDED.description
+              description= EXCLUDED.description,
+              vendor_id  = EXCLUDED.vendor_id
             RETURNING *
             """,
-            (hostname, ip_address, tacacs_key, description),
+            (hostname, ip_address, tacacs_key, description, vendor_id),
         )
-        return {"success": True, "host": cur.fetchone()}
+        device = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT d.*, v.vendor_name
+            FROM devices d
+            LEFT JOIN vendors v ON v.vendor_id = d.vendor_id
+            WHERE d.device_id = %s
+            """,
+            (device["device_id"],),
+        )
+        return {"success": True, "device": cur.fetchone()}
 
 
-def host_get_ip(ip_address: str) -> Dict[str, Any]:
+def device_create(
+    ip_address: str,
+    tacacs_key: str,
+    hostname: Optional[str] = None,
+    description: Optional[str] = None,
+    vendor_name: Optional[str] = None,
+) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM hosts WHERE ip_address = %s", (ip_address,))
+        try:
+            vendor_id = _resolve_vendor_id(cur, vendor_name)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
+        cur.execute(
+            """
+            INSERT INTO devices (hostname, ip_address, tacacs_key, description, vendor_id)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (ip_address) DO NOTHING
+            RETURNING *
+            """,
+            (hostname, ip_address, tacacs_key, description, vendor_id),
+        )
+        device = cur.fetchone()
+        if not device:
+            return {"success": False, "error": f"Device with IP '{ip_address}' already exists"}
+
+        cur.execute(
+            """
+            SELECT d.*, v.vendor_name
+            FROM devices d
+            LEFT JOIN vendors v ON v.vendor_id = d.vendor_id
+            WHERE d.device_id = %s
+            """,
+            (device["device_id"],),
+        )
+        return {"success": True, "device": cur.fetchone()}
+
+
+def device_get_ip(ip_address: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT d.*, v.vendor_name
+            FROM devices d
+            LEFT JOIN vendors v ON v.vendor_id = d.vendor_id
+            WHERE d.ip_address = %s
+            """,
+            (ip_address,),
+        )
         row = cur.fetchone()
         if not row:
-            return {"success": False, "error": f"Host with IP '{ip_address}' not found"}
-        return {"success": True, "host": row}
+            return {"success": False, "error": f"Device with IP '{ip_address}' not found"}
+        return {"success": True, "device": row}
 
 
-def host_get_name(hostname: str) -> Dict[str, Any]:
+def device_get_name(hostname: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM hosts WHERE hostname = %s", (hostname,))
+        cur.execute(
+            """
+            SELECT d.*, v.vendor_name
+            FROM devices d
+            LEFT JOIN vendors v ON v.vendor_id = d.vendor_id
+            WHERE d.hostname = %s
+            """,
+            (hostname,),
+        )
         row = cur.fetchone()
         if not row:
-            return {"success": False, "error": f"Host '{hostname}' not found"}
-        return {"success": True, "host": row}
+            return {"success": False, "error": f"Device '{hostname}' not found"}
+        return {"success": True, "device": row}
 
 
-def host_delete(ip_address: str) -> Dict[str, Any]:
+def device_delete(ip_address: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM hosts WHERE ip_address = %s RETURNING host_id",
+            "DELETE FROM devices WHERE ip_address = %s RETURNING device_id",
             (ip_address,),
         )
         deleted = cur.fetchone() is not None
         return {"success": True, "deleted": deleted}
 
 
-def host_list() -> Dict[str, Any]:
+def device_list() -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM hosts ORDER BY hostname NULLS LAST, ip_address")
+        cur.execute(
+            """
+            SELECT d.*, v.vendor_name
+            FROM devices d
+            LEFT JOIN vendors v ON v.vendor_id = d.vendor_id
+            ORDER BY d.hostname NULLS LAST, d.ip_address
+            """
+        )
         return {"success": True, "data": cur.fetchall()}
 
 
-# ----------------- HOST GROUPS -----------------
+def device_update(
+    current_ip_address: str,
+    new_ip_address: str,
+    tacacs_key: str,
+    hostname: Optional[str] = None,
+    description: Optional[str] = None,
+    vendor_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT device_id FROM devices WHERE ip_address = %s", (current_ip_address,))
+        existing = cur.fetchone()
+        if not existing:
+            return {"success": False, "error": f"Device with IP '{current_ip_address}' not found"}
+
+        try:
+            vendor_id = _resolve_vendor_id(cur, vendor_name)
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+
+        if new_ip_address != current_ip_address:
+            cur.execute("SELECT device_id FROM devices WHERE ip_address = %s", (new_ip_address,))
+            conflict = cur.fetchone()
+            if conflict:
+                return {"success": False, "error": f"Device with IP '{new_ip_address}' already exists"}
+
+        cur.execute(
+            """
+            UPDATE devices
+            SET ip_address = %s,
+                tacacs_key = %s,
+                hostname = %s,
+                description = %s,
+                vendor_id = %s
+            WHERE device_id = %s
+            RETURNING *
+            """,
+            (
+                new_ip_address,
+                tacacs_key,
+                hostname,
+                description,
+                vendor_id,
+                existing["device_id"],
+            ),
+        )
+        updated = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT d.*, v.vendor_name
+            FROM devices d
+            LEFT JOIN vendors v ON v.vendor_id = d.vendor_id
+            WHERE d.device_id = %s
+            """,
+            (updated["device_id"],),
+        )
+        return {"success": True, "device": cur.fetchone()}
 
 
-def hostgroup_put(
+# ----------------- DEVICE GROUPS -----------------
+
+
+def devicegroup_put(
     group_name: str,
     tacacs_key: Optional[str] = None,
     description: Optional[str] = None,
@@ -306,7 +508,7 @@ def hostgroup_put(
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
-            INSERT INTO host_groups (group_name, tacacs_key, description)
+            INSERT INTO device_groups (group_name, tacacs_key, description)
             VALUES (%s, %s, %s)
             ON CONFLICT (group_name)
             DO UPDATE SET
@@ -319,239 +521,125 @@ def hostgroup_put(
         return {"success": True, "group": cur.fetchone()}
 
 
-def hostgroup_get(group_name: str) -> Dict[str, Any]:
+def devicegroup_get(group_name: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM host_groups WHERE group_name = %s", (group_name,))
+        cur.execute("SELECT * FROM device_groups WHERE group_name = %s", (group_name,))
         row = cur.fetchone()
         if not row:
-            return {"success": False, "error": f"Host group '{group_name}' not found"}
+            return {"success": False, "error": f"Device group '{group_name}' not found"}
         return {"success": True, "group": row}
 
 
-def hostgroup_delete(group_name: str) -> Dict[str, Any]:
+def devicegroup_delete(group_name: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM host_groups WHERE group_name = %s RETURNING group_id",
+            "DELETE FROM device_groups WHERE group_name = %s RETURNING group_id",
             (group_name,),
         )
         deleted = cur.fetchone() is not None
         return {"success": True, "deleted": deleted}
 
 
-def hostgroup_list() -> Dict[str, Any]:
+def devicegroup_list() -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM host_groups ORDER BY group_name")
+        cur.execute("SELECT * FROM device_groups ORDER BY group_name")
         return {"success": True, "data": cur.fetchall()}
 
 
-# ----------------- HOST_GROUP_MEMBERS -----------------
+# ----------------- DEVICE_GROUP_MEMBERS -----------------
 
 
-def hostgroup_member_add(ip_address: str, group_name: str) -> Dict[str, Any]:
+def devicegroup_member_add(ip_address: str, group_name: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT host_id FROM hosts WHERE ip_address = %s", (ip_address,))
-        h = cur.fetchone()
-        if not h:
-            return {"success": False, "error": f"Host with IP '{ip_address}' not found"}
+        cur.execute("SELECT device_id FROM devices WHERE ip_address = %s", (ip_address,))
+        d = cur.fetchone()
+        if not d:
+            return {"success": False, "error": f"Device with IP '{ip_address}' not found"}
 
-        cur.execute("SELECT group_id FROM host_groups WHERE group_name = %s", (group_name,))
+        cur.execute("SELECT group_id FROM device_groups WHERE group_name = %s", (group_name,))
         g = cur.fetchone()
         if not g:
-            return {"success": False, "error": f"Host group '{group_name}' not found"}
+            return {"success": False, "error": f"Device group '{group_name}' not found"}
 
         cur.execute(
             """
-            INSERT INTO host_group_members (host_id, group_id)
+            INSERT INTO device_group_members (device_id, group_id)
             VALUES (%s, %s)
-            ON CONFLICT (host_id, group_id) DO NOTHING
+            ON CONFLICT (device_id, group_id) DO NOTHING
             RETURNING *
             """,
-            (h["host_id"], g["group_id"]),
+            (d["device_id"], g["group_id"]),
         )
         return {"success": True, "member": cur.fetchone()}
 
 
-def hostgroup_member_remove(ip_address: str, group_name: str) -> Dict[str, Any]:
+def devicegroup_member_remove(ip_address: str, group_name: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT host_id FROM hosts WHERE ip_address = %s", (ip_address,))
-        h = cur.fetchone()
-        if not h:
-            return {"success": False, "error": f"Host with IP '{ip_address}' not found"}
+        cur.execute("SELECT device_id FROM devices WHERE ip_address = %s", (ip_address,))
+        d = cur.fetchone()
+        if not d:
+            return {"success": False, "error": f"Device with IP '{ip_address}' not found"}
 
-        cur.execute("SELECT group_id FROM host_groups WHERE group_name = %s", (group_name,))
+        cur.execute("SELECT group_id FROM device_groups WHERE group_name = %s", (group_name,))
         g = cur.fetchone()
         if not g:
-            return {"success": False, "error": f"Host group '{group_name}' not found"}
+            return {"success": False, "error": f"Device group '{group_name}' not found"}
 
-        host_id = h[0] if isinstance(h, tuple) else h["host_id"]
+        device_id = d[0] if isinstance(d, tuple) else d["device_id"]
         group_id = g[0] if isinstance(g, tuple) else g["group_id"]
 
         cur.execute(
-            "DELETE FROM host_group_members WHERE host_id = %s AND group_id = %s RETURNING host_id",
-            (host_id, group_id),
+            "DELETE FROM device_group_members WHERE device_id = %s AND group_id = %s RETURNING device_id",
+            (device_id, group_id),
         )
         deleted = cur.fetchone() is not None
         return {"success": True, "deleted": deleted}
 
 
-def hostgroup_member_list(ip_address: Optional[str] = None, group_name: Optional[str] = None) -> Dict[str, Any]:
+def devicegroup_member_list(ip_address: Optional[str] = None, group_name: Optional[str] = None) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         if ip_address:
-            cur.execute("SELECT host_id FROM hosts WHERE ip_address = %s", (ip_address,))
-            h = cur.fetchone()
-            if not h:
-                return {"success": False, "error": f"Host with IP '{ip_address}' not found"}
+            cur.execute("SELECT device_id FROM devices WHERE ip_address = %s", (ip_address,))
+            d = cur.fetchone()
+            if not d:
+                return {"success": False, "error": f"Device with IP '{ip_address}' not found"}
             cur.execute(
                 """
-                SELECT h.ip_address, hg.group_name
-                FROM host_group_members m
-                JOIN hosts h ON h.host_id = m.host_id
-                JOIN host_groups hg ON hg.group_id = m.group_id
-                WHERE m.host_id = %s
-                ORDER BY hg.group_name
+                SELECT d.ip_address, dg.group_name
+                FROM device_group_members m
+                JOIN devices d ON d.device_id = m.device_id
+                JOIN device_groups dg ON dg.group_id = m.group_id
+                WHERE m.device_id = %s
+                ORDER BY dg.group_name
                 """,
-                (h["host_id"],),
+                (d["device_id"],),
             )
         elif group_name:
-            cur.execute("SELECT group_id FROM host_groups WHERE group_name = %s", (group_name,))
+            cur.execute("SELECT group_id FROM device_groups WHERE group_name = %s", (group_name,))
             g = cur.fetchone()
             if not g:
-                return {"success": False, "error": f"Host group '{group_name}' not found"}
+                return {"success": False, "error": f"Device group '{group_name}' not found"}
             cur.execute(
                 """
-                SELECT h.ip_address, hg.group_name
-                FROM host_group_members m
-                JOIN hosts h ON h.host_id = m.host_id
-                JOIN host_groups hg ON hg.group_id = m.group_id
+                SELECT d.ip_address, dg.group_name
+                FROM device_group_members m
+                JOIN devices d ON d.device_id = m.device_id
+                JOIN device_groups dg ON dg.group_id = m.group_id
                 WHERE m.group_id = %s
-                ORDER BY h.ip_address
+                ORDER BY d.ip_address
                 """,
                 (g["group_id"],),
             )
         else:
             cur.execute(
                 """
-                SELECT h.ip_address, hg.group_name
-                FROM host_group_members m
-                JOIN hosts h ON h.host_id = m.host_id
-                JOIN host_groups hg ON hg.group_id = m.group_id
-                ORDER BY h.ip_address, hg.group_name
+                SELECT d.ip_address, dg.group_name
+                FROM device_group_members m
+                JOIN devices d ON d.device_id = m.device_id
+                JOIN device_groups dg ON dg.group_id = m.group_id
+                ORDER BY d.ip_address, dg.group_name
                 """
             )
-        return {"success": True, "data": cur.fetchall()}
-
-
-# ----------------- ACCESS POLICIES -----------------
-
-
-def policy_put(
-    user_group_name: str,
-    host_group_name: str,
-    priv_lvl: int = 1,
-    allow_access: bool = True,
-) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT group_id FROM user_groups WHERE group_name = %s", (user_group_name,))
-        ug = cur.fetchone()
-        if not ug:
-            return {"success": False, "error": f"User group '{user_group_name}' not found"}
-
-        cur.execute("SELECT group_id FROM host_groups WHERE group_name = %s", (host_group_name,))
-        hg = cur.fetchone()
-        if not hg:
-            return {"success": False, "error": f"Host group '{host_group_name}' not found"}
-
-        cur.execute(
-            """
-            INSERT INTO access_policies (user_group_id, host_group_id, priv_lvl, allow_access)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (user_group_id, host_group_id)
-            DO UPDATE SET
-              priv_lvl    = EXCLUDED.priv_lvl,
-              allow_access= EXCLUDED.allow_access
-            RETURNING *
-            """,
-            (ug["group_id"], hg["group_id"], priv_lvl, allow_access),
-        )
-        return {"success": True, "policy": cur.fetchone()}
-
-
-def policy_get(policy_id: int) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM access_policies WHERE policy_id = %s", (policy_id,))
-        row = cur.fetchone()
-        if not row:
-            return {"success": False, "error": f"Policy {policy_id} not found"}
-        return {"success": True, "policy": row}
-
-
-def policy_delete(policy_id: int) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM access_policies WHERE policy_id = %s RETURNING policy_id", (policy_id,))
-        deleted = cur.fetchone() is not None
-        return {"success": True, "deleted": deleted}
-
-
-def policy_list() -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT ap.*, ug.group_name AS user_group_name, hg.group_name AS host_group_name
-            FROM access_policies ap
-            JOIN user_groups ug ON ug.group_id = ap.user_group_id
-            JOIN host_groups hg ON hg.group_id = ap.host_group_id
-            ORDER BY ug.group_name, hg.group_name
-            """
-        )
-        return {"success": True, "data": cur.fetchall()}
-
-
-# ----------------- COMMAND RULES -----------------
-
-
-def cmdrule_put(policy_id: int, command_pattern: str, action: str = "PERMIT") -> Dict[str, Any]:
-    action = action.upper()
-    if action not in ("PERMIT", "DENY"):
-        return {"success": False, "error": "action must be PERMIT or DENY"}
-
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT policy_id FROM access_policies WHERE policy_id = %s", (policy_id,))
-        if not cur.fetchone():
-            return {"success": False, "error": f"Policy {policy_id} not found"}
-
-        cur.execute(
-            """
-            INSERT INTO command_rules (policy_id, command_pattern, action)
-            VALUES (%s, %s, %s)
-            RETURNING *
-            """,
-            (policy_id, command_pattern, action),
-        )
-        return {"success": True, "rule": cur.fetchone()}
-
-
-def cmdrule_get(rule_id: int) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT * FROM command_rules WHERE rule_id = %s", (rule_id,))
-        row = cur.fetchone()
-        if not row:
-            return {"success": False, "error": f"Rule {rule_id} not found"}
-        return {"success": True, "rule": row}
-
-
-def cmdrule_delete(rule_id: int) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM command_rules WHERE rule_id = %s RETURNING rule_id", (rule_id,))
-        deleted = cur.fetchone() is not None
-        return {"success": True, "deleted": deleted}
-
-
-def cmdrule_list(policy_id: int) -> Dict[str, Any]:
-    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            "SELECT * FROM command_rules WHERE policy_id = %s ORDER BY rule_id",
-            (policy_id,),
-        )
         return {"success": True, "data": cur.fetchall()}
 
 
@@ -565,9 +653,6 @@ def totp_put(
     period: int = 30,
     is_enabled: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Генерирует TOTP secret, пишет его в user_totp и возвращает secret + otp_uri.
-    """
     secret = pyotp.random_base32()
     totp = pyotp.TOTP(secret, digits=digits, interval=period)
     otp_uri = totp.provisioning_uri(name=username, issuer_name=issuer)
@@ -658,12 +743,7 @@ def verify_totp_for_user(
     period: int = 30,
     valid_window: int = 1,
 ) -> Dict[str, Any]:
-    """
-    Проверка TOTP-кода для пользователя.
-    valid_window = 1 позволяет +/- один шаг времени.
-    """
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        # user
         cur.execute("SELECT user_id, is_active FROM users WHERE username = %s", (username,))
         u = cur.fetchone()
         if not u:
@@ -672,7 +752,6 @@ def verify_totp_for_user(
         if not u["is_active"]:
             return {"success": False, "verified": False, "reason": "user is inactive"}
 
-        # TOTP profile
         cur.execute("SELECT * FROM user_totp WHERE user_id = %s", (u["user_id"],))
         tf = cur.fetchone()
         if not tf:
@@ -691,7 +770,6 @@ def verify_totp_for_user(
         if not ok:
             return {"success": True, "verified": False, "reason": "invalid token"}
 
-        # запишем время успешного использования
         cur.execute(
             "UPDATE user_totp SET last_used_at = %s WHERE user_id = %s",
             (datetime.utcnow(), u["user_id"]),
@@ -700,36 +778,151 @@ def verify_totp_for_user(
         return {"success": True, "verified": True, "reason": "ok"}
 
 
-# ----------------- HOSTS ACCESSIBLE BY USER -----------------
+# ----------------- PROFILES -----------------
 
 
-def user_hosts(username: str) -> Dict[str, Any]:
-    """
-    Вернуть список хостов, к которым пользователь имеет доступ:
-      users -> user_group_members -> access_policies -> host_group_members -> hosts
-    """
+def profile_put(
+    profile_name: str,
+    profile_body: str,
+    description: Optional[str] = None,
+    is_active: bool = True,
+) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            """
+            INSERT INTO profiles (profile_name, profile_body, description, is_active)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (profile_name)
+            DO UPDATE SET
+              profile_body = EXCLUDED.profile_body,
+              description  = EXCLUDED.description,
+              is_active    = EXCLUDED.is_active
+            RETURNING *
+            """,
+            (profile_name, profile_body, description, is_active),
+        )
+        return {"success": True, "profile": cur.fetchone()}
+
+
+def profile_get(profile_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM profiles WHERE profile_name = %s", (profile_name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Profile '{profile_name}' not found"}
+        return {"success": True, "profile": row}
+
+
+def profile_delete(profile_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM profiles WHERE profile_name = %s RETURNING profile_id",
+            (profile_name,),
+        )
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def profile_list() -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM profiles ORDER BY profile_name")
+        return {"success": True, "data": cur.fetchall()}
+
+
+# ----------------- USER_PROFILE_MEMBERS -----------------
+
+
+def userprofile_member_add(username: str, profile_name: str) -> Dict[str, Any]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
         u = cur.fetchone()
         if not u:
             return {"success": False, "error": f"User '{username}' not found"}
 
+        cur.execute("SELECT profile_id FROM profiles WHERE profile_name = %s", (profile_name,))
+        p = cur.fetchone()
+        if not p:
+            return {"success": False, "error": f"Profile '{profile_name}' not found"}
+
         cur.execute(
             """
-            SELECT DISTINCT h.*
-            FROM user_group_members ugm
-            JOIN access_policies ap
-              ON ap.user_group_id = ugm.group_id
-             AND ap.allow_access = TRUE
-            JOIN host_group_members hgm
-              ON hgm.group_id = ap.host_group_id
-            JOIN hosts h
-              ON h.host_id = hgm.host_id
-            WHERE ugm.user_id = %s
-            ORDER BY h.hostname NULLS LAST, h.ip_address
+            INSERT INTO user_profile_members (user_id, profile_id)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id, profile_id) DO NOTHING
+            RETURNING *
             """,
-            (u["user_id"],),
+            (u["user_id"], p["profile_id"]),
         )
+        return {"success": True, "member": cur.fetchone()}
+
+
+def userprofile_member_remove(username: str, profile_name: str) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+        u = cur.fetchone()
+        if not u:
+            return {"success": False, "error": f"User '{username}' not found"}
+
+        cur.execute("SELECT profile_id FROM profiles WHERE profile_name = %s", (profile_name,))
+        p = cur.fetchone()
+        if not p:
+            return {"success": False, "error": f"Profile '{profile_name}' not found"}
+
+        user_id = u[0] if isinstance(u, tuple) else u["user_id"]
+        profile_id = p[0] if isinstance(p, tuple) else p["profile_id"]
+
+        cur.execute(
+            "DELETE FROM user_profile_members WHERE user_id = %s AND profile_id = %s RETURNING user_id",
+            (user_id, profile_id),
+        )
+        deleted = cur.fetchone() is not None
+        return {"success": True, "deleted": deleted}
+
+
+def userprofile_member_list(username: Optional[str] = None, profile_name: Optional[str] = None) -> Dict[str, Any]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if username:
+            cur.execute("SELECT user_id FROM users WHERE username = %s", (username,))
+            u = cur.fetchone()
+            if not u:
+                return {"success": False, "error": f"User '{username}' not found"}
+            cur.execute(
+                """
+                SELECT u.username, p.profile_name
+                FROM user_profile_members m
+                JOIN users u ON u.user_id = m.user_id
+                JOIN profiles p ON p.profile_id = m.profile_id
+                WHERE m.user_id = %s
+                ORDER BY p.profile_name
+                """,
+                (u["user_id"],),
+            )
+        elif profile_name:
+            cur.execute("SELECT profile_id FROM profiles WHERE profile_name = %s", (profile_name,))
+            p = cur.fetchone()
+            if not p:
+                return {"success": False, "error": f"Profile '{profile_name}' not found"}
+            cur.execute(
+                """
+                SELECT u.username, p.profile_name
+                FROM user_profile_members m
+                JOIN users u ON u.user_id = m.user_id
+                JOIN profiles p ON p.profile_id = m.profile_id
+                WHERE m.profile_id = %s
+                ORDER BY u.username
+                """,
+                (p["profile_id"],),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT u.username, p.profile_name
+                FROM user_profile_members m
+                JOIN users u ON u.user_id = m.user_id
+                JOIN profiles p ON p.profile_id = m.profile_id
+                ORDER BY u.username, p.profile_name
+                """
+            )
         return {"success": True, "data": cur.fetchall()}
 
 
@@ -737,7 +930,7 @@ def user_hosts(username: str) -> Dict[str, Any]:
 
 
 def main():
-    p = argparse.ArgumentParser(description="Tacacs DB helper (новая схема)")
+    p = argparse.ArgumentParser(description="Tacacs DB helper (new schema)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # USERS
@@ -756,23 +949,11 @@ def main():
 
     sub.add_parser("user-list")
 
-    # USER GROUPS
-    ugg = sub.add_parser("usergroup-get")
-    ugg.add_argument("group_name")
-
-    ugp = sub.add_parser("usergroup-put")
-    ugp.add_argument("group_name")
-    ugp.add_argument("--description")
-
-    ugd = sub.add_parser("usergroup-delete")
-    ugd.add_argument("group_name")
-
-    sub.add_parser("usergroup-list")
-
     # USER GROUP MEMBERS
     ugma = sub.add_parser("usergroup-member-add")
     ugma.add_argument("username")
     ugma.add_argument("group_name")
+    ugma.add_argument("--ro-rw", type=int, choices=[0, 1], default=0)
 
     ugmr = sub.add_parser("usergroup-member-remove")
     ugmr.add_argument("username")
@@ -782,80 +963,64 @@ def main():
     ugml.add_argument("--username")
     ugml.add_argument("--group_name")
 
-    # HOSTS
-    hp = sub.add_parser("host-put")
-    hp.add_argument("ip_address")
-    hp.add_argument("tacacs_key")
-    hp.add_argument("--hostname")
-    hp.add_argument("--description")
+    # VENDORS
+    vg = sub.add_parser("vendor-get")
+    vg.add_argument("vendor_name")
 
-    hgi = sub.add_parser("host-get-ip")
-    hgi.add_argument("ip_address")
+    vp = sub.add_parser("vendor-put")
+    vp.add_argument("vendor_name")
+    vp.add_argument("--description")
 
-    hgn = sub.add_parser("host-get-name")
-    hgn.add_argument("hostname")
+    vd = sub.add_parser("vendor-delete")
+    vd.add_argument("vendor_name")
 
-    hd = sub.add_parser("host-delete")
-    hd.add_argument("ip_address")
+    sub.add_parser("vendor-list")
 
-    sub.add_parser("host-list")
+    # DEVICES
+    dp = sub.add_parser("device-put")
+    dp.add_argument("ip_address")
+    dp.add_argument("tacacs_key")
+    dp.add_argument("--hostname")
+    dp.add_argument("--vendor-name")
+    dp.add_argument("--description")
 
-    # HOST GROUPS
-    hgg = sub.add_parser("hostgroup-get")
-    hgg.add_argument("group_name")
+    dgi = sub.add_parser("device-get-ip")
+    dgi.add_argument("ip_address")
 
-    hgp = sub.add_parser("hostgroup-put")
-    hgp.add_argument("group_name")
-    hgp.add_argument("--tacacs-key")
-    hgp.add_argument("--description")
+    dgn = sub.add_parser("device-get-name")
+    dgn.add_argument("hostname")
 
-    hgd = sub.add_parser("hostgroup-delete")
-    hgd.add_argument("group_name")
+    dd = sub.add_parser("device-delete")
+    dd.add_argument("ip_address")
 
-    sub.add_parser("hostgroup-list")
+    sub.add_parser("device-list")
 
-    # HOST GROUP MEMBERS
-    hgma = sub.add_parser("hostgroup-member-add")
-    hgma.add_argument("ip_address")
-    hgma.add_argument("group_name")
+    # DEVICE GROUPS
+    dgg = sub.add_parser("devicegroup-get")
+    dgg.add_argument("group_name")
 
-    hgmrem = sub.add_parser("hostgroup-member-remove")
-    hgmrem.add_argument("ip_address")
-    hgmrem.add_argument("group_name")
+    dgp = sub.add_parser("devicegroup-put")
+    dgp.add_argument("group_name")
+    dgp.add_argument("--tacacs-key")
+    dgp.add_argument("--description")
 
-    hgml = sub.add_parser("hostgroup-member-list")
-    hgml.add_argument("--ip_address")
-    hgml.add_argument("--group_name")
+    dgd = sub.add_parser("devicegroup-delete")
+    dgd.add_argument("group_name")
 
-    # POLICIES
-    pp = sub.add_parser("policy-put")
-    pp.add_argument("user_group_name")
-    pp.add_argument("host_group_name")
-    pp.add_argument("--priv-lvl", type=int, default=1)
-    pp.add_argument("--allow-access", type=lambda x: x.lower() == "true", default=True)
+    sub.add_parser("devicegroup-list")
 
-    pg = sub.add_parser("policy-get")
-    pg.add_argument("policy_id", type=int)
+    # DEVICE GROUP MEMBERS
+    dgma = sub.add_parser("devicegroup-member-add")
+    dgma.add_argument("ip_address")
+    dgma.add_argument("group_name")
 
-    pd = sub.add_parser("policy-delete")
-    pd.add_argument("policy_id", type=int)
+    dgmrem = sub.add_parser("devicegroup-member-remove")
+    dgmrem.add_argument("ip_address")
+    dgmrem.add_argument("group_name")
 
-    sub.add_parser("policy-list")
-
-    # COMMAND RULES
-    crp = sub.add_parser("cmdrule-put")
-    crp.add_argument("policy_id", type=int)
-    crp.add_argument("command_pattern")
-    crp.add_argument("--action", default="PERMIT")
-
-    crg = sub.add_parser("cmdrule-get")
-    crg.add_argument("rule_id", type=int)
-
-    crd = sub.add_parser("cmdrule-delete")
-    crd.add_argument("rule_id", type=int)
-
-    crl = sub.add_parser("cmdrule-list")
-    crl.add_argument("policy_id", type=int)
+    dgml = sub.add_parser("devicegroup-member-list")
+    dgml.add_argument("--ip_address")
+    dgml.add_argument("--group_name")
 
     # TOTP
     tfp = sub.add_parser("totp-put")
@@ -881,13 +1046,36 @@ def main():
     tfv.add_argument("--period", type=int, default=30)
     tfv.add_argument("--window", type=int, default=1)
 
-    # USER-HOSTS
-    uhp = sub.add_parser("user-hosts")
-    uhp.add_argument("username")
+    # PROFILES
+    prg = sub.add_parser("profile-get")
+    prg.add_argument("profile_name")
+
+    prp = sub.add_parser("profile-put")
+    prp.add_argument("profile_name")
+    prp.add_argument("profile_body")
+    prp.add_argument("--description")
+    prp.add_argument("--is-active", type=lambda x: x.lower() == "true", default=True)
+
+    prd = sub.add_parser("profile-delete")
+    prd.add_argument("profile_name")
+
+    sub.add_parser("profile-list")
+
+    # USER PROFILE MEMBERS
+    upma = sub.add_parser("userprofile-member-add")
+    upma.add_argument("username")
+    upma.add_argument("profile_name")
+
+    upmr = sub.add_parser("userprofile-member-remove")
+    upmr.add_argument("username")
+    upmr.add_argument("profile_name")
+
+    upml = sub.add_parser("userprofile-member-list")
+    upml.add_argument("--username")
+    upml.add_argument("--profile_name")
 
     args = p.parse_args()
 
-    # DISPATCH
     if args.cmd == "user-get":
         out = user_get(args.username)
     elif args.cmd == "user-put":
@@ -897,66 +1085,48 @@ def main():
     elif args.cmd == "user-list":
         out = user_list()
 
-    elif args.cmd == "usergroup-get":
-        out = usergroup_get(args.group_name)
-    elif args.cmd == "usergroup-put":
-        out = usergroup_put(args.group_name, args.description)
-    elif args.cmd == "usergroup-delete":
-        out = usergroup_delete(args.group_name)
-    elif args.cmd == "usergroup-list":
-        out = usergroup_list()
-
     elif args.cmd == "usergroup-member-add":
-        out = usergroup_member_add(args.username, args.group_name)
+        out = usergroup_member_add(args.username, args.group_name, args.ro_rw)
     elif args.cmd == "usergroup-member-remove":
         out = usergroup_member_remove(args.username, args.group_name)
     elif args.cmd == "usergroup-member-list":
         out = usergroup_member_list(args.username, args.group_name)
 
-    elif args.cmd == "host-put":
-        out = host_put(args.ip_address, args.tacacs_key, args.hostname, args.description)
-    elif args.cmd == "host-get-ip":
-        out = host_get_ip(args.ip_address)
-    elif args.cmd == "host-get-name":
-        out = host_get_name(args.hostname)
-    elif args.cmd == "host-delete":
-        out = host_delete(args.ip_address)
-    elif args.cmd == "host-list":
-        out = host_list()
+    elif args.cmd == "vendor-get":
+        out = vendor_get(args.vendor_name)
+    elif args.cmd == "vendor-put":
+        out = vendor_put(args.vendor_name, args.description)
+    elif args.cmd == "vendor-delete":
+        out = vendor_delete(args.vendor_name)
+    elif args.cmd == "vendor-list":
+        out = vendor_list()
 
-    elif args.cmd == "hostgroup-get":
-        out = hostgroup_get(args.group_name)
-    elif args.cmd == "hostgroup-put":
-        out = hostgroup_put(args.group_name, args.tacacs_key, args.description)
-    elif args.cmd == "hostgroup-delete":
-        out = hostgroup_delete(args.group_name)
-    elif args.cmd == "hostgroup-list":
-        out = hostgroup_list()
+    elif args.cmd == "device-put":
+        out = device_put(args.ip_address, args.tacacs_key, args.hostname, args.description, args.vendor_name)
+    elif args.cmd == "device-get-ip":
+        out = device_get_ip(args.ip_address)
+    elif args.cmd == "device-get-name":
+        out = device_get_name(args.hostname)
+    elif args.cmd == "device-delete":
+        out = device_delete(args.ip_address)
+    elif args.cmd == "device-list":
+        out = device_list()
 
-    elif args.cmd == "hostgroup-member-add":
-        out = hostgroup_member_add(args.ip_address, args.group_name)
-    elif args.cmd == "hostgroup-member-remove":
-        out = hostgroup_member_remove(args.ip_address, args.group_name)
-    elif args.cmd == "hostgroup-member-list":
-        out = hostgroup_member_list(args.ip_address, args.group_name)
+    elif args.cmd == "devicegroup-get":
+        out = devicegroup_get(args.group_name)
+    elif args.cmd == "devicegroup-put":
+        out = devicegroup_put(args.group_name, args.tacacs_key, args.description)
+    elif args.cmd == "devicegroup-delete":
+        out = devicegroup_delete(args.group_name)
+    elif args.cmd == "devicegroup-list":
+        out = devicegroup_list()
 
-    elif args.cmd == "policy-put":
-        out = policy_put(args.user_group_name, args.host_group_name, args.priv_lvl, args.allow_access)
-    elif args.cmd == "policy-get":
-        out = policy_get(args.policy_id)
-    elif args.cmd == "policy-delete":
-        out = policy_delete(args.policy_id)
-    elif args.cmd == "policy-list":
-        out = policy_list()
-
-    elif args.cmd == "cmdrule-put":
-        out = cmdrule_put(args.policy_id, args.command_pattern, args.action)
-    elif args.cmd == "cmdrule-get":
-        out = cmdrule_get(args.rule_id)
-    elif args.cmd == "cmdrule-delete":
-        out = cmdrule_delete(args.rule_id)
-    elif args.cmd == "cmdrule-list":
-        out = cmdrule_list(args.policy_id)
+    elif args.cmd == "devicegroup-member-add":
+        out = devicegroup_member_add(args.ip_address, args.group_name)
+    elif args.cmd == "devicegroup-member-remove":
+        out = devicegroup_member_remove(args.ip_address, args.group_name)
+    elif args.cmd == "devicegroup-member-list":
+        out = devicegroup_member_list(args.ip_address, args.group_name)
 
     elif args.cmd == "totp-put":
         out = totp_put(
@@ -981,8 +1151,27 @@ def main():
             valid_window=args.window,
         )
 
-    elif args.cmd == "user-hosts":
-        out = user_hosts(args.username)
+    elif args.cmd == "profile-get":
+        out = profile_get(args.profile_name)
+    elif args.cmd == "profile-put":
+        out = profile_put(
+            args.profile_name,
+            args.profile_body,
+            description=args.description,
+            is_active=args.is_active,
+        )
+    elif args.cmd == "profile-delete":
+        out = profile_delete(args.profile_name)
+    elif args.cmd == "profile-list":
+        out = profile_list()
+
+    elif args.cmd == "userprofile-member-add":
+        out = userprofile_member_add(args.username, args.profile_name)
+    elif args.cmd == "userprofile-member-remove":
+        out = userprofile_member_remove(args.username, args.profile_name)
+    elif args.cmd == "userprofile-member-list":
+        out = userprofile_member_list(args.username, args.profile_name)
+
     else:
         out = {"success": False, "error": "unknown command"}
 
